@@ -1,0 +1,494 @@
+// Ready-to-deploy Next.js app for Vercel
+// Copy these files into a repo and push to GitHub. Connect the repo on Vercel.
+// Replace env vars with your Airtable details. The /customise page replaces Jotform.
+
+// ========================
+// FILE: package.json
+// ========================
+{
+  "name": "bangtidy-customise-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.11.30",
+    "@types/react": "18.2.66",
+    "@types/react-dom": "18.2.22",
+    "typescript": "5.4.5"
+  }
+}
+
+// ========================
+// FILE: tsconfig.json
+// ========================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }]
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "**/*.cjs", "**/*.mjs"],
+  "exclude": ["node_modules"]
+}
+
+// ========================
+// FILE: next.config.mjs
+// ========================
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  experimental: {
+    serverComponentsExternalPackages: [],
+  },
+};
+export default nextConfig;
+
+// ========================
+// FILE: .env.example
+// ========================
+# Airtable API
+AIRTABLE_API_KEY=pat_xxx
+AIRTABLE_BASE_ID=app_xxx
+AIRTABLE_TABLE_ORDERS=Orders
+AIRTABLE_TABLE_TEMPLATES=Templates
+AIRTABLE_TABLE_PERSONALISATIONS=Personalisations
+
+# (Optional) App base URL for CORS/testing
+APP_BASE_URL=http://localhost:3000
+
+// ========================
+// FILE: app/layout.tsx
+// ========================
+import React from "react";
+import "./globals.css";
+
+export const metadata = { title: "Bang Tidy – Customise", description: "Personalise your order" };
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
+}
+
+// ========================
+// FILE: app/globals.css
+// ========================
+/* Minimal styles (Tailwind optional). You can swap to Tailwind later. */
+* { box-sizing: border-box; }
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: #f8fafc; color: #0f172a; }
+input, button { font: inherit; }
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+.btn { background: #0f172a; color: #fff; padding: 10px 14px; border-radius: 12px; border: none; }
+.btn:disabled { opacity: .4; }
+.field { margin-bottom: 12px; }
+.label { display:block; font-weight:600; font-size:14px; margin-bottom:6px; }
+.help { font-size: 12px; color: #64748b; }
+.preview { border: 1px dashed #cbd5e1; border-radius: 16px; height: 280px; display: grid; place-items: center; }
+
+// ========================
+// FILE: app/customise/page.tsx
+// ========================
+"use client";
+import React, { useEffect, useMemo, useState } from "react";
+import type { TemplateConfig, FlowType } from "@/lib/types";
+
+function useQueryParam(key: string, fallback = "") {
+  const [val, setVal] = useState<string>(fallback);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    setVal(p.get(key) ?? fallback);
+  }, [key, fallback]);
+  return val;
+}
+
+export default function Page() {
+  const orderId = useQueryParam("order_id", "DEMO-ORDER-123");
+  const [tpl, setTpl] = useState<TemplateConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/order?order_id=${encodeURIComponent(orderId)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setTpl(data.template as TemplateConfig);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to load template");
+      } finally { setLoading(false); }
+    };
+    if (orderId) load();
+  }, [orderId]);
+
+  return (
+    <div className="container">
+      <h1 className="" style={{fontSize:24, fontWeight:700}}>Customise</h1>
+      <p className="help">Order: <code>{orderId}</code></p>
+
+      {loading && <div className="card">Loading template…</div>}
+      {error && <div className="card" style={{borderColor:'#fecaca', background:'#fef2f2'}}>Error: {error}</div>}
+      {!loading && !tpl && <div className="card" style={{borderColor:'#fecaca', background:'#fef2f2'}}>No template found for this order.</div>}
+
+      {tpl && <FlowRouter orderId={orderId} tpl={tpl} />}
+    </div>
+  );
+}
+
+function FlowRouter({ orderId, tpl }: { orderId: string; tpl: TemplateConfig }) {
+  switch (tpl.flowType) {
+    case "PHOTO_ONLY":
+      return <PhotoOnlyFlow orderId={orderId} tpl={tpl} />;
+    case "PHOTO_TEXT":
+      return <PhotoTextFlow orderId={orderId} tpl={tpl} />;
+    case "TEMPLATE_TEXT":
+      return <TemplateTextFlow orderId={orderId} tpl={tpl} />;
+    case "TEXT_ONLY":
+    default:
+      return <TemplateTextFlow orderId={orderId} tpl={tpl} />;
+  }
+}
+
+function PhotoOnlyFlow({ orderId, tpl }: { orderId: string; tpl: TemplateConfig }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!file) return setPreview(null);
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const canSave = !!file && !saving;
+
+  const save = async () => {
+    if (!file) return;
+    setSaving(true);
+    try {
+      // In MVP, we just store the File name. Swap to S3 upload later.
+      const fieldValues = { photo: file.name };
+      const res = await fetch("/api/personalisation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: orderId, fieldValues })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      alert("Saved");
+    } catch (e:any) { alert(e.message || "Failed"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card">
+      <h2 style={{fontSize:18, fontWeight:600}}>{tpl.name}</h2>
+      <div className="field">
+        <label className="label">Photo</label>
+        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        <div className="help">JPG/PNG, recommended ≥ 1800×1800.</div>
+      </div>
+      <div className="preview">{preview ? <img src={preview} alt="preview" style={{maxWidth:'100%', maxHeight:'100%', objectFit:'contain'}}/> : <span className="help">Preview appears here</span>}</div>
+      <div style={{marginTop:16, display:'flex', justifyContent:'flex-end'}}>
+        <button className="btn" disabled={!canSave} onClick={save}>{saving?"Saving…":"Save & Continue"}</button>
+      </div>
+    </div>
+  );
+}
+
+function TemplateTextFlow({ orderId, tpl }: { orderId: string; tpl: TemplateConfig }) {
+  const [lines, setLines] = useState<Record<string,string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const inputs = useMemo(() => {
+    const arr: { id: string; required: boolean; max: number; label: string }[] = [];
+    for (let i=1;i<=tpl.textLinesMax;i++) arr.push({ id:`line${i}`, required:i<=tpl.textLinesMin, max: 24, label:`Line ${i}`});
+    return arr;
+  }, [tpl.textLinesMax, tpl.textLinesMin]);
+
+  const valid = inputs.every(f => !f.required || (lines[f.id]?.trim().length ?? 0) > 0);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/personalisation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId, fieldValues: lines })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      alert("Saved");
+    } catch (e:any) { alert(e.message || "Failed"); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card">
+      <h2 style={{fontSize:18, fontWeight:600}}>{tpl.name}</h2>
+      <div className="field help">Add your text</div>
+      {inputs.map(f => (
+        <div key={f.id} className="field">
+          <label className="label">{f.label} {f.required && <span style={{color:'#dc2626'}}>*</span>}</label>
+          <input type="text" maxLength={f.max} value={lines[f.id] ?? ""} onChange={(e)=>setLines(s=>({...s,[f.id]:e.target.value}))} />
+          <div className="help">Max {f.max} characters</div>
+        </div>
+      ))}
+      <div className="preview">
+        <div>
+          {inputs.length===0 ? <span className="help">No text needed</span> : inputs.map(f => (
+            <p key={f.id} style={{textAlign:'center', fontWeight:600}}>{lines[f.id] ?? ""}</p>
+          ))}
+        </div>
+      </div>
+      <div style={{marginTop:16, display:'flex', justifyContent:'flex-end'}}>
+        <button className="btn" disabled={!valid || saving} onClick={save}>{saving?"Saving…":"Save & Continue"}</button>
+      </div>
+    </div>
+  );
+}
+
+function PhotoTextFlow({ orderId, tpl }: { orderId: string; tpl: TemplateConfig }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [lines, setLines] = useState<Record<string,string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!file) return setPreview(null);
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const inputs = useMemo(() => {
+    const arr: { id: string; required: boolean; max: number; label: string }[] = [];
+    for (let i=1;i<=tpl.textLinesMax;i++) arr.push({ id:`line${i}`, required:i<=tpl.textLinesMin, max: 24, label:`Line ${i}`});
+    return arr;
+  }, [tpl.textLinesMax, tpl.textLinesMin]);
+
+  const valid = (!!file || tpl.photoSlots===0) && inputs.every(f => !f.required || (lines[f.id]?.trim().length ?? 0) > 0);
+
+  const save = async () => {
+    if (!valid) return;
+    setSaving(true);
+    try {
+      const fieldValues = { ...lines, photo: file?.name ?? null };
+      const res = await fetch("/api/personalisation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId, fieldValues }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      alert("Saved");
+    } catch (e:any) { alert(e.message || "Failed"); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="card">
+      <h2 style={{fontSize:18, fontWeight:600}}>{tpl.name}</h2>
+      <div className="field">
+        <label className="label">Photo</label>
+        <input type="file" accept="image/*" onChange={(e)=>setFile(e.target.files?.[0] ?? null)} />
+        <div className="help">JPG/PNG, recommended ≥ 1800×1800.</div>
+      </div>
+      {inputs.map(f => (
+        <div key={f.id} className="field">
+          <label className="label">{f.label} {f.required && <span style={{color:'#dc2626'}}>*</span>}</label>
+          <input type="text" maxLength={f.max} value={lines[f.id] ?? ""} onChange={(e)=>setLines(s=>({...s,[f.id]:e.target.value}))} />
+        </div>
+      ))}
+      <div className="preview">{preview ? <img src={preview} alt="preview" style={{maxWidth:'100%', maxHeight:'100%', objectFit:'contain'}}/> : <span className="help">Preview appears here</span>}</div>
+      <div style={{marginTop:16, display:'flex', justifyContent:'flex-end'}}>
+        <button className="btn" disabled={!valid || saving} onClick={save}>{saving?"Saving…":"Save & Continue"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ========================
+// FILE: lib/types.ts
+// ========================
+export type FlowType = "PHOTO_ONLY" | "TEMPLATE_TEXT" | "PHOTO_TEXT" | "TEXT_ONLY";
+
+export interface TemplateConfig {
+  templateId: string;
+  name: string;
+  productKind: "beer_mat" | "bar_runner" | "apron" | "air_freshener" | "gift_wrap";
+  flowType: FlowType;
+  textLinesMin: number; // 0-3
+  textLinesMax: number; // 0-3
+  photoSlots: number;   // 0-1
+}
+
+// ========================
+// FILE: lib/airtable.ts
+// ========================
+const AT_KEY = process.env.AIRTABLE_API_KEY!;
+const AT_BASE = process.env.AIRTABLE_BASE_ID!;
+const TBL_ORDERS = process.env.AIRTABLE_TABLE_ORDERS || "Orders";
+const TBL_TEMPLATES = process.env.AIRTABLE_TABLE_TEMPLATES || "Templates";
+const TBL_PERS = process.env.AIRTABLE_TABLE_PERSONALISATIONS || "Personalisations";
+
+interface AirtableRecord<T=any> { id: string; fields: T; createdTime: string; }
+
+async function atFetch(path: string, init?: RequestInit) {
+  const res = await fetch(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(path)}`,
+    { ...(init||{}), headers: { "Authorization": `Bearer ${AT_KEY}`, "Content-Type": "application/json", ...(init?.headers||{}) } }
+  );
+  if (!res.ok) throw new Error(`Airtable ${res.status}`);
+  return res.json();
+}
+
+export async function findOrderByOrderId(orderId: string) {
+  const formula = encodeURIComponent(`{order_id} = "${orderId}"`);
+  const data = await atFetch(`${TBL_ORDERS}?maxRecords=1&filterByFormula=${formula}`);
+  const rec: AirtableRecord | undefined = data.records?.[0];
+  return rec || null;
+}
+
+export async function getTemplateByOrder(orderRec: AirtableRecord) {
+  // Prefer linked Template field; fallback to template_id text
+  const fields: any = orderRec.fields || {};
+  const linked: string[] | undefined = fields.Template; // linked field name example
+  let tplId: string | null = null;
+  if (Array.isArray(linked) && linked.length) tplId = linked[0];
+  if (!tplId && fields.template_id) {
+    // lookup by template_id text on Templates table
+    const f = encodeURIComponent(`{template_id} = "${fields.template_id}"`);
+    const data = await atFetch(`${TBL_TEMPLATES}?maxRecords=1&filterByFormula=${f}`);
+    const rec: AirtableRecord | undefined = data.records?.[0];
+    return rec || null;
+  }
+  if (!tplId) return null;
+  const data = await atFetch(`${TBL_TEMPLATES}/${tplId}`);
+  return data as AirtableRecord;
+}
+
+export function toTemplateConfig(tplRec: AirtableRecord): import("./types").TemplateConfig {
+  const f: any = tplRec.fields;
+  return {
+    templateId: f.template_id || tplRec.id,
+    name: f.name || "Template",
+    productKind: (f.product_kind || "beer_mat").toString() as any,
+    flowType: (f.flow_type || "TEMPLATE_TEXT").toString() as any,
+    textLinesMin: Number(f.text_lines_min ?? 0),
+    textLinesMax: Number(f.text_lines_max ?? 0),
+    photoSlots: Number(f.photo_slots ?? 0),
+  };
+}
+
+export async function upsertPersonalisation(orderId: string, values: any) {
+  // Find existing personalisation by order_id
+  const f = encodeURIComponent(`{order_id} = "${orderId}"`);
+  const existing = await atFetch(`${TBL_PERS}?maxRecords=1&filterByFormula=${f}`);
+  // Find order record for link field
+  const orderRec = await findOrderByOrderId(orderId);
+  const orderLink = orderRec ? [orderRec.id] : [];
+
+  const fields: any = {
+    order_id: orderId,
+    field_values: JSON.stringify(values),
+  };
+  if (orderLink.length) fields.Order = orderLink; // link field named "Order"
+
+  if (existing.records && existing.records.length) {
+    const id = existing.records[0].id;
+    const res = await atFetch(`${TBL_PERS}/${id}`, { method: "PATCH", body: JSON.stringify({ fields }) });
+    return res;
+  } else {
+    const res = await atFetch(`${TBL_PERS}`, { method: "POST", body: JSON.stringify({ fields }) });
+    return res;
+  }
+}
+
+// ========================
+// FILE: app/api/order/route.ts
+// ========================
+import { NextRequest, NextResponse } from "next/server";
+import { findOrderByOrderId, getTemplateByOrder, toTemplateConfig } from "@/lib/airtable";
+
+export async function GET(req: NextRequest) {
+  const orderId = req.nextUrl.searchParams.get("order_id");
+  if (!orderId) return NextResponse.json({ error: "Missing order_id" }, { status: 400 });
+  try {
+    const order = await findOrderByOrderId(orderId);
+    if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    const tpl = await getTemplateByOrder(order);
+    if (!tpl) return NextResponse.json({ error: "Template not found" }, { status: 404 });
+    const config = toTemplateConfig(tpl);
+    return NextResponse.json({ order: { id: order.id, order_id: orderId, template_record_id: tpl.id }, template: config });
+  } catch (e:any) {
+    return NextResponse.json({ error: e.message || "Server error" }, { status: 500 });
+  }
+}
+
+// ========================
+// FILE: app/api/personalisation/route.ts
+// ========================
+import { NextRequest, NextResponse } from "next/server";
+import { upsertPersonalisation } from "@/lib/airtable";
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const orderId = body.orderId as string;
+    const fieldValues = body.fieldValues || {};
+    if (!orderId) return NextResponse.json({ error: "Missing orderId" }, { status: 400 });
+    await upsertPersonalisation(orderId, fieldValues);
+    return NextResponse.json({ ok: true, order_id: orderId });
+  } catch (e:any) {
+    return NextResponse.json({ error: e.message || "Server error" }, { status: 500 });
+  }
+}
+
+// ========================
+// FILE: README.md
+// ========================
+# Bang Tidy Customise App (Etsy)
+
+## What this does
+- Receives `order_id` → looks up the order + template in Airtable
+- Renders the correct flow (Photo-only, Text-only, Photo+Text)
+- Saves personalisation values back to Airtable (upsert by order_id)
+
+## Quick start
+1. **Create repo** and add these files.
+2. `npm i`
+3. Copy `.env.example` to `.env.local` and fill:
+   - `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`
+   - Table names if different
+4. `npm run dev` and open `http://localhost:3000/customise?order_id=TEST123`
+5. On Vercel, set the same env vars and deploy.
+
+## Airtable requirements
+- **Orders** table: fields `order_id` (text), `Template` (link to Templates) **or** `template_id` (text).
+- **Templates** table: fields `template_id`, `name`, `product_kind`, `flow_type`, `text_lines_min`, `text_lines_max`, `photo_slots`.
+- **Personalisations**: fields `order_id` (text), `Order` (link to Orders), `field_values` (long text).
+
+## Make integration
+- In your existing Verify scenario, set the 302 `Location` to:
+  `https://<your-vercel-app>.vercel.app/customise?order_id={{Order_ID}}`
+
+## Next steps
+- Swap file-name placeholder with S3 uploads.
+- Add face cutout API (`/api/cutout`) and real SVG preview + 300DPI render.
