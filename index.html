@@ -1,1 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bang Tidy – Customisation App</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    h1 { font-size: 1.5rem; }
+    .card { padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
+    a { color: blue; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1>Bang Tidy – Customisation Framework</h1>
+  <div id="app" class="card">Loading…</div>
+
+  <script>
+    // very basic router
+    function router() {
+      const hash = location.hash.replace(/^#\\/?/, "");
+      const app = document.getElementById("app");
+
+      if (!hash) {
+        app.innerHTML = "<p>Welcome 👋</p><p>Try <a href='#/catalog'>#/catalog</a></p>";
+        return;
+      }
+
+      if (hash === "catalog") {
+        app.innerHTML = "<p>Catalog page (will list templates here)</p>";
+        return;
+      }
+
+      app.innerHTML = "<p>404 – Page not found</p>";
+    }
+
+    window.addEventListener("hashchange", router);
+    router(); // kick off
+  </script>
+</body>
+</html>
 
