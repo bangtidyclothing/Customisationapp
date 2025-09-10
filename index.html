@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bang Tidy – Customisation App</title>
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    h1 { font-size: 1.5rem; }
-    .card { padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
-    a { color: blue; text-decoration: none; }
+    body { font-family: system-ui, sans-serif; margin: 24px; color:#111 }
+    .card { padding: 16px; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:16px }
+    a { color:#2563eb; text-decoration:none }
+    .muted { color:#6b7280 }
+    ul { padding-left: 18px }
   </style>
 </head>
 <body>
@@ -16,27 +17,90 @@
   <div id="app" class="card">Loading…</div>
 
   <script>
-    // very basic router
-    function router() {
+    // --- tiny helper
+    const $ = (id) => document.getElementById(id);
+
+    // --- data source (local json)
+    async function loadTemplates() {
+      const res = await fetch("./data/templates.json", { cache: "no-store" });
+      if (!res.ok) throw new Error("templates.json not found");
+      return res.json(); // { records: [...] }
+    }
+
+    // --- router
+    async function router() {
+      const app = $("app");
       const hash = location.hash.replace(/^#\\/?/, "");
-      const app = document.getElementById("app");
-
       if (!hash) {
-        app.innerHTML = "<p>Welcome 👋</p><p>Try <a href='#/catalog'>#/catalog</a></p>";
+        app.innerHTML = `
+          <p>Welcome 👋</p>
+          <p>Try <a href="#/catalog">#/catalog</a> or
+             <span class="muted">#/sku/CO-CARD-PHOTO-12</span></p>`;
         return;
       }
 
-      if (hash === "catalog") {
-        app.innerHTML = "<p>Catalog page (will list templates here)</p>";
+      const segs = hash.split("/").filter(Boolean);
+
+      // /catalog
+      if (segs[0] === "catalog") {
+        app.innerHTML = "<p class='muted'>Loading catalog…</p>";
+        try {
+          const data = await loadTemplates();
+          if (!data.records?.length) { app.innerHTML = "<p>No templates found.</p>"; return; }
+          const items = data.records.map(r =>
+            `<li><a href="#/t/${encodeURIComponent(r.TYPE)}/${encodeURIComponent(r.sku_pattern)}">
+               ${r.name}</a> <span class="muted">(${r.SKU})</span></li>`
+          ).join("");
+          app.innerHTML = `<div class="card"><h2>Catalog</h2><ul>${items}</ul></div>`;
+        } catch (e) {
+          app.innerHTML = `<p>Error loading catalog: ${e.message}</p>`;
+        }
         return;
       }
 
+      // /sku/:sku  -> find template by SKU and redirect to /t/:type/:slug
+      if (segs[0] === "sku" && segs[1]) {
+        app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
+        try {
+          const data = await loadTemplates();
+          const rec = data.records.find(r => (r.SKU || r.sku) === segs[1]);
+          if (!rec) { app.innerHTML = "<p>Template not found for that SKU.</p>"; return; }
+          location.hash = `#/t/${rec.TYPE}/${rec.sku_pattern}`;
+        } catch (e) {
+          app.innerHTML = `<p>Error: ${e.message}</p>`;
+        }
+        return;
+      }
+
+      // /t/:type/:slug  -> show very simple template view
+      if (segs[0] === "t" && segs[1] && segs[2]) {
+        app.innerHTML = "<p class='muted'>Loading template…</p>";
+        try {
+          const data = await loadTemplates();
+          const rec = data.records.find(r => r.TYPE === segs[1] && r.sku_pattern === segs[2]);
+          if (!rec) { app.innerHTML = "<p>Template not found.</p>"; return; }
+          app.innerHTML = `
+            <div class="card">
+              <h2>${rec.name}</h2>
+              <p class="muted">SKU: ${rec.SKU}</p>
+              <p>Inputs:</p>
+              <ul>
+                ${rec.fields.map(f => `<li><strong>${f.label||f.key}</strong> – ${f.type}</li>`).join("")}
+              </ul>
+              <p><a href="#/catalog">← Back to catalog</a></p>
+            </div>`;
+        } catch (e) {
+          app.innerHTML = `<p>Error: ${e.message}</p>`;
+        }
+        return;
+      }
+
+      // fallback
       app.innerHTML = "<p>404 – Page not found</p>";
     }
 
     window.addEventListener("hashchange", router);
-    router(); // kick off
+    router();
   </script>
 </body>
 </html>
-
