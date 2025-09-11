@@ -10,7 +10,7 @@
         {
           "key": "photo",
           "type": "image",
-          "label": "Upload your photo",
+          "label": "Upload your photo 1",
           "required": true,
           "constraints": {
             "minPx": [1000, 1000],
