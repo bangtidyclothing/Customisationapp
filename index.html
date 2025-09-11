@@ -19,55 +19,51 @@
 <div id="debug" aria-live="polite"><b>Debug</b><br/></div>
 
 <script>
-  /* ========= Debug box mirrors console (useful on iPad) ========= */
+  /* ========= Debug box mirrors console (good on iPad) ========= */
   (function(){
     const box = document.getElementById('debug');
     const add = (label, args) => {
-      const msg = [...args].map(v => {
-        try { return typeof v==='string' ? v : JSON.stringify(v); } catch { return String(v); }
-      }).join(' ');
-      const line = document.createElement('div');
-      line.innerHTML = `<b>${label}</b> ${msg}`;
-      box.appendChild(line);
-      box.scrollTop = box.scrollHeight;
+      const msg = [...args].map(v => { try { return typeof v==='string'? v : JSON.stringify(v); } catch { return String(v); } }).join(' ');
+      const line = document.createElement('div'); line.innerHTML = `<b>${label}</b> ${msg}`;
+      box.appendChild(line); box.scrollTop = box.scrollHeight;
     };
     ['log','info','warn','error'].forEach(fn=>{
       const orig = console[fn].bind(console);
       console[fn] = (...a)=>{ add(fn.toUpperCase()+':', a); orig(...a); };
     });
-    // Catch fatal errors too
     window.onerror = (msg, src, line, col, err) => console.error('[onerror]', msg, src, line+':'+col, err && err.stack);
     window.addEventListener('unhandledrejection', e => console.error('[unhandled]', e.reason));
   })();
 
   /* ========= Helpers ========= */
   const $ = id => document.getElementById(id);
-  const TPL_URL = './data/templates.json'; // must exist at data/templates.json (lowercase)
+  const TPL_URL = './data/templates.json'; // must be data/templates.json (lowercase) in main branch
 
-  // One-time forced refresh with cache-buster (?v=timestamp), safe against loops
+  // One-time forced refresh with cache-buster (?v=timestamp), keyed per path+hash to avoid loops
   (function forceOneRefresh(){
-    const key = 'bt_refreshed_' + location.pathname; // per-path flag
-    const already = sessionStorage.getItem(key);
-    if (!already) {
+    const key = 'bt_refreshed_' + location.pathname + '|' + (location.hash || '');
+    if (!sessionStorage.getItem(key)) {
       const url = new URL(location.href);
-      if (!url.searchParams.has('v')) {
-        url.searchParams.set('v', Date.now().toString());
-        sessionStorage.setItem(key, '1');
-        console.log('[refresh] adding cache-buster and reloading:', url.toString());
-        location.replace(url.toString());
-      }
+      url.searchParams.set('v', Date.now().toString());
+      sessionStorage.setItem(key, '1');
+      console.log('[refresh] add cache-buster and reload:', url.toString());
+      location.replace(url.toString());
     }
   })();
 
-  function getHash(){ const h=(location.hash||'').slice(1); console.log('[router] hash', location.hash, 'parsed', h); return h; }
+  function getHash(){
+    const h = (location.hash || '').slice(1);
+    console.log('[router] hash', location.hash, 'parsed', h);
+    return h;
+  }
 
   async function loadTemplates(){
     console.log('[data] fetching', TPL_URL);
     const res = await fetch(TPL_URL, { cache: 'no-store' });
     console.log('[data] status', res.status);
-    if(!res.ok) throw new Error('templates.json not found');
+    if (!res.ok) throw new Error('templates.json not found');
     const json = await res.json();
-    console.log('[data] records', json.records?.length||0);
+    console.log('[data] records', json.records?.length || 0);
     return json;
   }
 
@@ -75,12 +71,71 @@
   async function renderHome(){
     $('app').innerHTML = `
       <p>Welcome 👋</p>
-      <p>Try <a href="#/catalog">#/catalog</a> or a SKU link like <code>#/sku/CO-CARD-PHOTO-12</code>.</p>
-      <p class="muted">This page auto-adds <code>?v=timestamp</code> once to bust cache for direct links.</p>`;
+      <p>Try <a href="#/catalog">#/catalog</a>, <code>#/sku/CO-CARD-PHOTO-12</code>, or a direct template like
+      <code>#/t/beer-mat/photo-beer-mat-12</code>.</p>
+      <p class="muted">This page auto-adds <code>?v=timestamp</code> once per hash to bust cache on iOS.</p>`;
   }
 
   async function renderCatalog(){
     const app = $('app'); app.innerHTML = "<p class='muted'>Loading catalog…</p>";
     try{
       const data = await loadTemplates();
-      if(!data.records?.length){ app.innerHTML = "<p>No
+      if (!data.records?.length){ app.innerHTML = "<p>No templates found.</p>"; return; }
+      const items = data.records.map(r =>
+        `<li><a href="#/t/${encodeURIComponent(r.TYPE)}/${encodeURIComponent(r.sku_pattern)}">${r.name}</a>
+           <span class="muted">(${r.SKU})</span></li>`).join('');
+      app.innerHTML = `<div class="card"><h2>Catalog</h2><ul>${items}</ul></div>`;
+    }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
+  }
+
+  async function renderSku(sku){
+    const app = $('app'); app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
+    try{
+      const data = await loadTemplates();
+      const rec = data.records.find(r => (r.SKU || r.sku) === sku);
+      if (!rec){ app.innerHTML = "<p>Template not found for that SKU.</p>"; return; }
+      const target = `#/t/${rec.TYPE}/${rec.sku_pattern}`;
+      console.log('[sku] resolved', sku, '→', target);
+      location.hash = target;
+    }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
+  }
+
+  async function renderTemplate(type, slug){
+    const app = $('app'); app.innerHTML = "<p class='muted'>Loading template…</p>";
+    try{
+      const data = await loadTemplates();
+      const rec = data.records.find(r => r.TYPE === type && r.sku_pattern === slug);
+      if (!rec){ app.innerHTML = "<p>Template not found.</p>"; return; }
+      app.innerHTML = `
+        <div class="card">
+          <h2>${rec.name}</h2>
+          <p class="muted">SKU: ${rec.SKU}</p>
+          <p>Inputs:</p>
+          <ul>${(rec.fields||[]).map(f=>`<li><strong>${f.label||f.key}</strong> – ${f.type}</li>`).join('')}</ul>
+          <p><a href="#/catalog">← Back to catalog</a></p>
+        </div>`;
+    }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
+  }
+
+  /* ========= Router ========= */
+  async function router(){
+    const h = getHash();
+    const segs = h.split('/').filter(Boolean);
+    console.log('[router] segs', segs);
+    if (!h) return renderHome();
+    if (segs[0] === 'catalog') return renderCatalog();
+    if (segs[0] === 'sku' && segs[1]) return renderSku(decodeURIComponent(segs[1]));
+    if (segs[0] === 't' && segs[1] && segs[2]) return renderTemplate(decodeURIComponent(segs[1]), decodeURIComponent(segs[2]));
+    $('app').innerHTML = "<p>404 – Page not found</p>";
+  }
+
+  // Run router reliably even on direct deep-links (extra nudges for iOS)
+  window.addEventListener('hashchange', router);
+  window.addEventListener('DOMContentLoaded', () => {
+    router();
+    setTimeout(router, 0);
+    setTimeout(router, 50);
+  });
+</script>
+</body>
+</html>
