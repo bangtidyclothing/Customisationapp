@@ -7,10 +7,28 @@
       "name": "Photo Beer Mat (12 pack)",
       "SKU": "CO-CARD-PHOTO-12",
       "fields": [
-        { "key": "photo", "type": "image", "label": "Upload your photo", "required": true,
-          "constraints": { "minPx": [1000,1000], "aspect": "square", "formats": ["jpg","jpeg","png"], "maxMB": 10 } },
-        { "key": "text", "type": "text", "label": "Add optional text", "required": false, "maxLength": 30 }
-      ]
+        {
+          "key": "photo",
+          "type": "image",
+          "label": "Upload your photo",
+          "required": true,
+          "constraints": {
+            "minPx": [1000, 1000],
+            "aspect": "square",
+            "formats": ["jpg", "jpeg", "png"],
+            "maxMB": 10
+          }
+        },
+        {
+          "key": "text",
+          "type": "text",
+          "label": "Add optional text",
+          "required": false,
+          "maxLength": 30
+        }
+      ],
+      "hero": "./assets/template-beer-mat.png",
+      "units_per_sheet": 12
     }
   ]
 }
