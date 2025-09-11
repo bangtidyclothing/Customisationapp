@@ -59,10 +59,12 @@
     return h;
   }
 
-  // Build a cache-busted URL for templates.json
+  // Always fetch templates.json from the repo raw URL
   function templatesUrl(){
-    const u = new URL('./data/templates.json', location.href);
-    u.searchParams.set('v', Date.now().toString());
+    const u = new URL(
+      'https://raw.githubusercontent.com/bangtidyclothing/Customisationapp/main/data/templates.json'
+    );
+    u.searchParams.set('v', Date.now().toString()); // cache-buster
     return u.toString();
   }
 
