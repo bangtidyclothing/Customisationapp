@@ -30,18 +30,3 @@
     }
   ]
 }
-{
-  "records": [
-    {
-      "template_id": "tpl-test",
-      "TYPE": "beer-mat",
-      "sku_pattern": "test-template",
-      "name": "Test Template",
-      "SKU": "TEST-SKU-001",
-      "fields": [
-        { "key": "photo", "type": "image", "label": "Upload your photo" },
-        { "key": "text", "type": "text", "label": "Optional text" }
-      ]
-    }
-  ]
-}
