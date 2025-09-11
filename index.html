@@ -7,7 +7,7 @@
   body{font-family:system-ui,sans-serif;margin:24px;color:#111}
   .card{padding:16px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:16px}
   a{color:#2563eb;text-decoration:none}.muted{color:#6b7280}ul{padding-left:18px}
-  #debug{position:fixed;right:12px;bottom:12px;width:min(52ch,92vw);max-height:42vh;overflow:auto;
+  #debug{position:fixed;right:12px;bottom:12px;width:min(56ch,92vw);max-height:42vh;overflow:auto;
          background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:10px;padding:10px;
          font:12px/1.4 ui-monospace;box-shadow:0 8px 30px #0004}
   #debug b{color:#93c5fd}
@@ -19,7 +19,7 @@
 <div id="debug" aria-live="polite"><b>Debug</b><br/></div>
 
 <script>
-  /* ========= Debug box mirrors console ========= */
+  /* ===== Debug box mirrors console (good on iPad) ===== */
   (function(){
     const box = document.getElementById('debug');
     const add = (label, args) => {
@@ -35,9 +35,8 @@
     window.addEventListener('unhandledrejection', e => console.error('[unhandled]', e.reason));
   })();
 
-  /* ========= Helpers ========= */
+  /* ===== Helpers ===== */
   const $ = id => document.getElementById(id);
-  const TPL_URL = './data/templates.json';
 
   // One-time cache-buster per path+hash
   (function forceOneRefresh(){
@@ -60,17 +59,29 @@
     return h;
   }
 
+  // Build a cache-busted URL for templates.json
+  function templatesUrl(){
+    const u = new URL('./data/templates.json', location.href);
+    u.searchParams.set('v', Date.now().toString());
+    return u.toString();
+  }
+
   async function loadTemplates(){
-    console.log('[data] fetching', TPL_URL);
-    const res = await fetch(TPL_URL, { cache: 'no-store' });
+    const url = templatesUrl();
+    console.log('[data] fetching', url);
+    const res = await fetch(url, { cache: 'no-store' });
     console.log('[data] status', res.status);
+    const txt = await res.text();
+    console.log('[data] first300', txt.slice(0,300));
     if (!res.ok) throw new Error('templates.json not found');
-    const json = await res.json();
-    console.log('[data] records', json.records?.length || 0);
+    let json; try { json = JSON.parse(txt); } catch(e){ console.error('[data] JSON parse error', e.message); throw e; }
+    const skus = (json.records||[]).map(r => r.SKU || r.sku);
+    const pairs = (json.records||[]).map(r => `${r.TYPE}/${r.sku_pattern}`);
+    console.log('[data] records', json.records?.length || 0, '| SKUs =', skus, '| pairs =', pairs);
     return json;
   }
 
-  /* ========= Views ========= */
+  /* ===== Views ===== */
   async function renderHome(){
     $('app').innerHTML = `
       <p>Welcome 👋</p>
@@ -89,7 +100,6 @@
     }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
   }
 
-  // PATCHED: tolerant SKU match + debug of available SKUs
   async function renderSku(skuRaw){
     const app = $('app'); app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
     try{
@@ -144,7 +154,7 @@
     }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
   }
 
-  /* ========= Router ========= */
+  /* ===== Router ===== */
   async function router(){
     const h = getHash();
     const segs = h.split('/').filter(Boolean);
