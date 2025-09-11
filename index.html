@@ -30,7 +30,7 @@
     // --- router
     async function router() {
       const app = $("app");
-      const hash = location.hash.replace(/^#\\/?/, "");
+      const hash = location.hash.replace(/^#\/?/, "");
       if (!hash) {
         app.innerHTML = `
           <p>Welcome 👋</p>
