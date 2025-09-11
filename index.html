@@ -1,68 +1,117 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bang Tidy – Customisation App</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 24px; color:#111 }
-    .card { padding: 16px; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:16px }
-    a { color:#2563eb; text-decoration:none }
-    .muted { color:#6b7280 }
-    ul { padding-left: 18px }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bang Tidy – Customisation App</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; color:#111 }
+  .card { padding: 16px; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:16px }
+  a { color:#2563eb; text-decoration:none }
+  .muted { color:#6b7280 }
+  ul { padding-left: 18px }
+  .pill { display:inline-block; padding:2px 8px; border:1px solid #e5e7eb; border-radius:999px; font-size:12px; }
+</style>
 </head>
 <body>
-  <h1>Bang Tidy – Customisation Framework</h1>
+  <h1>Bang Tidy – Customisation Framework <span id="h" class="pill"></span></h1>
   <div id="app" class="card">Loading…</div>
 
-  <script>
-    // --- helper
-    const $ = (id) => document.getElementById(id);
+<script>
+  const $ = (id) => document.getElementById(id);
 
-    // --- load local JSON
-    async function loadTemplates() {
-      const res = await fetch("./data/templates.json", { cache: "no-store" });
-      if (!res.ok) throw new Error("templates.json not found");
-      return res.json();
+  // SUPER simple hash parser (no regex)
+  function getHash() {
+    const h = (location.hash || "").slice(1); // remove leading '#'
+    console.log("[router] location.hash =", location.hash, "parsed =", h);
+    $("h").textContent = location.hash || "(no-hash)";
+    return h;
+  }
+
+  async function loadTemplates() {
+    console.log("[data] fetching ./data/templates.json");
+    const res = await fetch("./data/templates.json", { cache: "no-store" });
+    console.log("[data] status", res.status);
+    if (!res.ok) throw new Error("templates.json not found");
+    const json = await res.json();
+    console.log("[data] records", json.records?.length || 0);
+    return json;
+  }
+
+  async function renderHome() {
+    $("app").innerHTML = `
+      <p>Welcome 👋</p>
+      <p>Try <a href="#/catalog">#/catalog</a> or <a href="#/sku/TEST-SKU-001">#/sku/TEST-SKU-001</a></p>
+      <p class="muted">If you see “Loading…” forever, hard refresh or append <code>?v=5</code> to the URL.</p>
+    `;
+  }
+
+  async function renderCatalog() {
+    const app = $("app");
+    app.innerHTML = "<p class='muted'>Loading catalog…</p>";
+    try {
+      const data = await loadTemplates();
+      if (!data.records?.length) { app.innerHTML = "<p>No templates found.</p>"; return; }
+      const items = data.records.map(r =>
+        `<li><a href="#/t/${encodeURIComponent(r.TYPE)}/${encodeURIComponent(r.sku_pattern)}">${r.name}</a> <span class="muted">(${r.SKU})</span></li>`
+      ).join("");
+      app.innerHTML = `<div class="card"><h2>Catalog</h2><ul>${items}</ul></div>`;
+    } catch (e) {
+      app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`;
+      console.error(e);
     }
+  }
 
-    // --- router
-    async function router() {
-      const app = $("app");
-      const hash = location.hash.replace(/^#\/?/, "");
-      console.log("hash=", location.hash, "parsed=", hash);
-      if (!hash) {
-        app.innerHTML = `
-          <p>Welcome 👋</p>
-          <p>Try <a href="#/catalog">#/catalog</a> or
-             <span class="muted">#/sku/CO-CARD-PHOTO-12</span></p>`;
-        return;
-      }
+  async function renderSku(sku) {
+    const app = $("app");
+    app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
+    try {
+      const data = await loadTemplates();
+      const rec = data.records.find(r => (r.SKU || r.sku) === sku);
+      if (!rec) { app.innerHTML = "<p>Template not found for that SKU.</p>"; return; }
+      location.hash = `#/t/${rec.TYPE}/${rec.sku_pattern}`;
+    } catch (e) {
+      app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`;
+      console.error(e);
+    }
+  }
 
-      const segs = hash.split("/").filter(Boolean);
+  async function renderTemplate(type, slug) {
+    const app = $("app");
+    app.innerHTML = "<p class='muted'>Loading template…</p>";
+    try {
+      const data = await loadTemplates();
+      const rec = data.records.find(r => r.TYPE === type && r.sku_pattern === slug);
+      if (!rec) { app.innerHTML = "<p>Template not found.</p>"; return; }
+      app.innerHTML = `
+        <div class="card">
+          <h2>${rec.name}</h2>
+          <p class="muted">SKU: ${rec.SKU}</p>
+          <p>Inputs:</p>
+          <ul>${(rec.fields||[]).map(f => `<li><strong>${f.label||f.key}</strong> – ${f.type}</li>`).join("")}</ul>
+          <p><a href="#/catalog">← Back to catalog</a></p>
+        </div>`;
+    } catch (e) {
+      app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`;
+      console.error(e);
+    }
+  }
 
-      // /catalog
-      if (segs[0] === "catalog") {
-        app.innerHTML = "<p class='muted'>Loading catalog…</p>";
-        try {
-          const data = await loadTemplates();
-          if (!data.records?.length) { app.innerHTML = "<p>No templates found.</p>"; return; }
-          const items = data.records.map(r =>
-            `<li><a href="#/t/${encodeURIComponent(r.TYPE)}/${encodeURIComponent(r.sku_pattern)}">
-               ${r.name}</a> <span class="muted">(${r.SKU})</span></li>`
-          ).join("");
-          app.innerHTML = `<div class="card"><h2>Catalog</h2><ul>${items}</ul></div>`;
-        } catch (e) {
-          app.innerHTML = `<p>Error loading catalog: ${e.message}</p>`;
-        }
-        return;
-      }
+  async function router() {
+    const h = getHash();
+    if (!h) return renderHome();
+    const segs = h.split("/").filter(Boolean);
+    console.log("[router] segs", segs);
 
-      // /sku/:sku → resolve to /t/:type/:slug
-      if (segs[0] === "sku" && segs[1]) {
-        app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
-        try {
-          const data = await loadTemplates();
-          const rec = data.records.find(r => (r.SKU || r.sku) === segs[1]);
-          if (!rec) { app.innerHTML = "<p>Template not
+    if (segs[0] === "catalog") return renderCatalog();
+    if (segs[0] === "sku" && segs[1]) return renderSku(decodeURIComponent(segs[1]));
+    if (segs[0] === "t" && segs[1] && segs[2]) return renderTemplate(decodeURIComponent(segs[1]), decodeURIComponent(segs[2]));
+    $("app").innerHTML = "<p>404 – Page not found</p>";
+  }
+
+  window.addEventListener("hashchange", router);
+  window.addEventListener("DOMContentLoaded", router);
+  router();
+</script>
+</body>
+</html>
