@@ -1,28 +1,67 @@
-<!doctype html><html><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>BT Customisation – Diagnostic</title>
-<style>body{font-family:system-ui,sans-serif;margin:24px}pre{background:#f6f6f6;padding:12px;border-radius:8px;overflow:auto}</style>
-</head><body>
-<h1>Diagnostic</h1>
-<div id="out">Testing…</div>
-<script>
-(async()=>{
-  const out = document.getElementById('out');
-  try {
-    const res = await fetch('./data/templates.json',{cache:'no-store'});
-    out.innerHTML = `<p>Fetch status: <b>${res.status}</b></p>`;
-    const txt = await res.text();
-    out.insertAdjacentHTML('beforeend', `<p>First 200 chars:</p><pre>${txt.slice(0,200).replace(/[<>&]/g,s=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}${txt.length>200?'…':''}</pre>`);
-    let data;
-    try { data = JSON.parse(txt); } catch(e){ out.insertAdjacentHTML('beforeend', `<p><b>JSON parse error:</b> ${e.message}</p>`); return; }
-    out.insertAdjacentHTML('beforeend', `<p>Records found: <b>${data.records?.length||0}</b></p>`);
-    if (data.records?.length) {
-      out.insertAdjacentHTML('beforeend', `<ul>${data.records.map(r=>`<li>${r.name} <small>(${r.SKU})</small></li>`).join('')}</ul>`);
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bang Tidy – Customisation App</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; color:#111 }
+    .card { padding: 16px; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:16px }
+    a { color:#2563eb; text-decoration:none }
+    .muted { color:#6b7280 }
+    ul { padding-left: 18px }
+  </style>
+</head>
+<body>
+  <h1>Bang Tidy – Customisation Framework</h1>
+  <div id="app" class="card">Loading…</div>
+
+  <script>
+    // --- helper
+    const $ = (id) => document.getElementById(id);
+
+    // --- load local JSON
+    async function loadTemplates() {
+      const res = await fetch("./data/templates.json", { cache: "no-store" });
+      if (!res.ok) throw new Error("templates.json not found");
+      return res.json();
     }
-    out.insertAdjacentHTML('beforeend', `<p><a href="#/catalog">Go to catalog</a></p>`);
-  } catch(err){
-    out.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${err?.message||err}</p>`;
-  }
-})();
-</script>
-</body></html>
+
+    // --- router
+    async function router() {
+      const app = $("app");
+      const hash = location.hash.replace(/^#\\/?/, "");
+      if (!hash) {
+        app.innerHTML = `
+          <p>Welcome 👋</p>
+          <p>Try <a href="#/catalog">#/catalog</a> or
+             <span class="muted">#/sku/CO-CARD-PHOTO-12</span></p>`;
+        return;
+      }
+
+      const segs = hash.split("/").filter(Boolean);
+
+      // /catalog
+      if (segs[0] === "catalog") {
+        app.innerHTML = "<p class='muted'>Loading catalog…</p>";
+        try {
+          const data = await loadTemplates();
+          if (!data.records?.length) { app.innerHTML = "<p>No templates found.</p>"; return; }
+          const items = data.records.map(r =>
+            `<li><a href="#/t/${encodeURIComponent(r.TYPE)}/${encodeURIComponent(r.sku_pattern)}">
+               ${r.name}</a> <span class="muted">(${r.SKU})</span></li>`
+          ).join("");
+          app.innerHTML = `<div class="card"><h2>Catalog</h2><ul>${items}</ul></div>`;
+        } catch (e) {
+          app.innerHTML = `<p>Error loading catalog: ${e.message}</p>`;
+        }
+        return;
+      }
+
+      // /sku/:sku → resolve to /t/:type/:slug
+      if (segs[0] === "sku" && segs[1]) {
+        app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
+        try {
+          const data = await loadTemplates();
+          const rec = data.records.find(r => (r.SKU || r.sku) === segs[1]);
+          if (!rec) { app.innerHTML = "<p>Template not
