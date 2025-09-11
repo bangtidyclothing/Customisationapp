@@ -26,9 +26,35 @@
           "required": false,
           "maxLength": 30
         }
-      ],
-      "hero": "./assets/template-beer-mat.png",
-      "units_per_sheet": 12
+      ]
+    },
+    {
+      "template_id": "tpl-co-card-photo-24",
+      "TYPE": "beer-mat",
+      "sku_pattern": "photo-beer-mat-24",
+      "name": "Photo Beer Mat (24 pack)",
+      "SKU": "CO-CARD-PHOTO-24",
+      "fields": [
+        {
+          "key": "photo",
+          "type": "image",
+          "label": "Upload your photo",
+          "required": true,
+          "constraints": {
+            "minPx": [1000, 1000],
+            "aspect": "square",
+            "formats": ["jpg", "jpeg", "png"],
+            "maxMB": 10
+          }
+        },
+        {
+          "key": "text",
+          "type": "text",
+          "label": "Add optional text",
+          "required": false,
+          "maxLength": 30
+        }
+      ]
     }
   ]
 }
