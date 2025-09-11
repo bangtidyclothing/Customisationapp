@@ -19,7 +19,7 @@
 <div id="debug" aria-live="polite"><b>Debug</b><br/></div>
 
 <script>
-  /* ========= Debug box mirrors console (good on iPad) ========= */
+  /* ========= Debug box mirrors console ========= */
   (function(){
     const box = document.getElementById('debug');
     const add = (label, args) => {
@@ -37,9 +37,9 @@
 
   /* ========= Helpers ========= */
   const $ = id => document.getElementById(id);
-  const TPL_URL = './data/templates.json'; // must be data/templates.json (lowercase) in main branch
+  const TPL_URL = './data/templates.json';
 
-  // One-time forced refresh with cache-buster (?v=timestamp), keyed per path+hash to avoid loops
+  // One-time cache-buster per path+hash
   (function forceOneRefresh(){
     const key = 'bt_refreshed_' + location.pathname + '|' + (location.hash || '');
     if (!sessionStorage.getItem(key)) {
@@ -50,6 +50,9 @@
       location.replace(url.toString());
     }
   })();
+
+  const norm = s => (s ?? '').toString().trim();
+  const normU = s => norm(s).toUpperCase();
 
   function getHash(){
     const h = (location.hash || '').slice(1);
@@ -71,9 +74,7 @@
   async function renderHome(){
     $('app').innerHTML = `
       <p>Welcome 👋</p>
-      <p>Try <a href="#/catalog">#/catalog</a>, <code>#/sku/CO-CARD-PHOTO-12</code>, or a direct template like
-      <code>#/t/beer-mat/photo-beer-mat-12</code>.</p>
-      <p class="muted">This page auto-adds <code>?v=timestamp</code> once per hash to bust cache on iOS.</p>`;
+      <p>Try <a href="#/catalog">#/catalog</a>, <code>#/sku/CO-CARD-PHOTO-12</code>, or <code>#/t/beer-mat/photo-beer-mat-12</code>.</p>`;
   }
 
   async function renderCatalog(){
@@ -88,24 +89,50 @@
     }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
   }
 
-  async function renderSku(sku){
+  // PATCHED: tolerant SKU match + debug of available SKUs
+  async function renderSku(skuRaw){
     const app = $('app'); app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
     try{
+      const sku = normU(skuRaw);
       const data = await loadTemplates();
-      const rec = data.records.find(r => (r.SKU || r.sku) === sku);
-      if (!rec){ app.innerHTML = "<p>Template not found for that SKU.</p>"; return; }
+      const available = (data.records||[]).map(r => normU(r.SKU || r.sku));
+      console.log('[sku] looking for', sku, 'in', available);
+      const rec = (data.records||[]).find(r => normU(r.SKU || r.sku) === sku);
+      if (!rec){
+        app.innerHTML = `<div class="card">
+          <p><b>Template not found for that SKU.</b></p>
+          <p class="muted">Asked: ${skuRaw}</p>
+          <p>Available SKUs:</p>
+          <ul>${available.map(x=>`<li>${x}</li>`).join('')}</ul>
+          <p><a href="#/catalog">← Back to catalog</a></p>
+        </div>`;
+        return;
+      }
       const target = `#/t/${rec.TYPE}/${rec.sku_pattern}`;
-      console.log('[sku] resolved', sku, '→', target);
+      console.log('[sku] resolved', skuRaw, '→', target);
       location.hash = target;
     }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
   }
 
-  async function renderTemplate(type, slug){
+  async function renderTemplate(typeRaw, slugRaw){
     const app = $('app'); app.innerHTML = "<p class='muted'>Loading template…</p>";
     try{
+      const type = norm(typeRaw);
+      const slug = norm(slugRaw);
       const data = await loadTemplates();
-      const rec = data.records.find(r => r.TYPE === type && r.sku_pattern === slug);
-      if (!rec){ app.innerHTML = "<p>Template not found.</p>"; return; }
+      console.log('[template] seeking', `${type}/${slug}`);
+      console.warn('[template] available', (data.records||[]).map(r => `${r.TYPE}/${r.sku_pattern}`));
+      const rec = (data.records||[]).find(r => r.TYPE === type && r.sku_pattern === slug);
+      if (!rec){
+        app.innerHTML = `<div class="card">
+          <p><b>Template not found.</b></p>
+          <p class="muted">Asked: ${typeRaw} / ${slugRaw}</p>
+          <p>Available:</p>
+          <ul>${(data.records||[]).map(r=>`<li>${r.TYPE}/${r.sku_pattern}</li>`).join('')}</ul>
+          <p><a href="#/catalog">← Back to catalog</a></p>
+        </div>`;
+        return;
+      }
       app.innerHTML = `
         <div class="card">
           <h2>${rec.name}</h2>
@@ -129,7 +156,6 @@
     $('app').innerHTML = "<p>404 – Page not found</p>";
   }
 
-  // Run router reliably even on direct deep-links (extra nudges for iOS)
   window.addEventListener('hashchange', router);
   window.addEventListener('DOMContentLoaded', () => {
     router();
