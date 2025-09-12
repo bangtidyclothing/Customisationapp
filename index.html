@@ -1,70 +1,162 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Customisation App</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    :root { --bd:#ddd; --muted:#666; --bg:#fafafa; --fg:#111; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color: var(--fg); }
-    h1 { margin: 0 0 12px; }
-    .card { margin-top: 1rem; padding: 12px; border: 1px solid var(--bd); border-radius: 12px; background: #fff; }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    button { padding: 9px 14px; border: 1px solid var(--bd); background: #fff; border-radius: 8px; cursor: pointer; }
-    input[type="text"], input[type="url"], input[type="file"] { padding: 9px 10px; border: 1px solid var(--bd); border-radius: 8px; min-width: 220px; }
-    label { display:block; font-weight: 600; margin-top: 10px; }
-    small { color: var(--muted); }
-    ul { padding-left: 18px; margin: 6px 0 0; }
-    #templates-status { margin-top:6px; color: var(--muted); }
-    .hidden { display: none !important; }
-    .error { color: #b00020; }
-    .success { color: #0f7b0f; }
-    img.preview { max-width: 240px; max-height: 240px; border:1px solid var(--bd); border-radius:8px; margin-top:6px; object-fit: contain; }
-  </style>
-</head>
-<body>
-  <h1>Customisation App</h1>
+<script>
+// 0) Optional: hard overrides by template_id or SKU
+const ROUTE_OVERRIDE = {
+  // 'tpl-ppna-photo': 'text-photo',
+  // 'CO-CARD-PHOTO-12': 'text-photo',
+  // 'tpl-mask-photo-001': 'photo-only',
+};
 
-  <!-- Templates list -->
-  <div id="templates" class="card">
-    <strong>Templates</strong>
-    <div id="templates-status">Loading…</div>
-    <ul id="templates-list"></ul>
-  </div>
+// 1) Decide personalisation type
+function getPersonalisationType(tpl) {
+  // explicit override?
+  const o = ROUTE_OVERRIDE[tpl.template_id] || ROUTE_OVERRIDE[tpl.SKU];
+  if (o) return o;
 
-  <!-- Simulator (for iPad testing without console) -->
-  <div class="card" id="simPanel">
-    <strong>Simulate Jotform</strong>
-    <div class="row" style="margin-top:8px;">
-      <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-photo-12)" />
-      <input id="simName" placeholder="name" />
-      <input id="simOrder" placeholder="orderId" />
-      <input id="simPhoto" placeholder="photo URL (optional)" />
-      <button id="simBtn">Start</button>
-    </div>
-    <div style="margin-top:8px; color: var(--muted); font-size: 12px;">
-      Tip: copy a template_id from the list above, enter name/orderId, and click Start.
-    </div>
-  </div>
+  // (optional) use Airtable TYPE if you set it consistently
+  // if (tpl.TYPE === 'mask') return 'photo-only';
 
-  <!-- Customiser -->
-  <div id="customiser" class="card hidden">
-    <div id="c-head"><strong id="c-title"></strong></div>
-    <form id="c-form" style="margin-top:8px;"></form>
-    <div id="c-errors" class="error" style="margin-top:8px;"></div>
-    <div class="row" style="margin-top:10px;">
-      <button id="c-submit" type="button">Continue</button>
-      <button id="c-cancel" type="button">Cancel</button>
-    </div>
-    <div id="c-done" class="success" style="margin-top:10px;"></div>
-  </div>
+  // infer from fields
+  const fields = Array.isArray(tpl.fields) ? tpl.fields : [];
+  const hasText  = fields.some(f => f.type === 'text');
+  const hasPhoto = fields.some(f => f.type === 'image');
 
-  <script>
-  // ---- Params reader (supports query OR hash) ----
-  function getParams() {
-    const qs = new URLSearchParams(location.search);
-    if (qs.toString()) return qs;
-    const h = (location.hash || "").replace(/^#/, "");
-    return new URLSearchParams(h);
-  }
-  function qp(k){ return getPara
+  if (hasText && hasPhoto) return 'text-photo';
+  if (hasPhoto) return 'photo-only';
+  if (hasText)  return 'text-only';
+  return 'fallback';
+}
+
+// 2) Router: calls the right renderer
+function startRoutedWorkflow(tpl, ctx) {
+  const type = getPersonalisationType(tpl);
+  if (type === 'text-only')   return renderTextOnly(tpl, ctx);
+  if (type === 'photo-only')  return renderPhotoOnly(tpl, ctx);
+  if (type === 'text-photo')  return renderTextAndPhoto(tpl, ctx);
+  return renderFallback(tpl, ctx);
+}
+
+// 3) Renderers (minimal but production-friendly)
+
+// utilities
+function hideStartPanels(){
+  document.getElementById('templates')?.classList.add('hidden');
+  document.getElementById('simPanel')?.classList.add('hidden');
+  document.getElementById('customiser')?.classList.remove('hidden');
+}
+function setHead(tpl){
+  document.getElementById('c-title').textContent =
+    `${tpl.template_id} — ${tpl.name || ''}`;
+  document.getElementById('c-errors').textContent = '';
+  document.getElementById('c-done').textContent = '';
+  document.getElementById('c-form').innerHTML = '';
+}
+
+function renderTextOnly(tpl, ctx){
+  hideStartPanels(); setHead(tpl);
+  const form = document.getElementById('c-form');
+
+  const textField = (tpl.fields || []).find(f => f.type === 'text') || { key:'text', label:'Your text', maxLength: 30, required: true };
+  // reuse your existing builder lightly
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <label for="f_text">${textField.label || 'Your text'}</label>
+    <input id="f_text" name="text" type="text" ${textField.maxLength ? `maxlength="${textField.maxLength}"`:''} value="${(ctx.prefill?.text||'').replace(/"/g,'&quot;')}">
+    <small>${textField.maxLength ? `Max ${textField.maxLength} chars` : ''}</small>
+  `;
+  form.appendChild(wrap);
+
+  wireSubmit(tpl, ctx, async () => {
+    const text = document.getElementById('f_text').value.trim();
+    const errs = [];
+    if (textField.required && !text) errs.push('Text is required');
+    return { errs, out: { text } };
+  });
+}
+
+function renderPhotoOnly(tpl, ctx){
+  hideStartPanels(); setHead(tpl);
+  const form = document.getElementById('c-form');
+
+  const imgField = (tpl.fields || []).find(f => f.type === 'image') || { key:'photo', label:'Upload photo', constraints:{ formats:['jpg','jpeg','png'], maxMB:10 } };
+
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <label>${imgField.label || 'Upload photo'}</label>
+    <input id="f_photo_url" type="url" placeholder="Paste image URL" value="${ctx.prefill?.photo || ''}">
+    <input id="f_photo_file" type="file" accept="${(imgField.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
+    <img id="f_photo_prev" class="preview" style="display:none;">
+    <small>
+      ${(imgField.constraints?.minPx ? `Min ${imgField.constraints.minPx[0]}×${imgField.constraints.minPx[1]}px • `:'')}
+      ${(imgField.constraints?.aspect ? `Aspect ${imgField.constraints.aspect} • `:'')}
+      ${(imgField.constraints?.maxMB ? `Max ${imgField.constraints.maxMB}MB • `:'')}
+      Formats: ${(imgField.constraints?.formats||['jpg','jpeg','png']).join(', ')}
+    </small>
+  `;
+  form.appendChild(wrap);
+
+  // mini preview
+  const urlEl = document.getElementById('f_photo_url');
+  const fileEl = document.getElementById('f_photo_file');
+  const prevEl = document.getElementById('f_photo_prev');
+  const show = (src)=>{ if(src){ prevEl.src=src; prevEl.style.display='block'; } else { prevEl.style.display='none'; } };
+  urlEl.addEventListener('input', ()=> show(safeUrl(urlEl.value.trim())));
+  fileEl.addEventListener('change', ()=>{
+    const f = fileEl.files?.[0]; if(!f) return;
+    show(URL.createObjectURL(f));
+  });
+  if (ctx.prefill?.photo) show(ctx.prefill.photo);
+
+  wireSubmit(tpl, ctx, async () => {
+    const url = (urlEl.value||'').trim();
+    const file = fileEl.files?.[0];
+    const errs = [];
+    if (!url && !file) errs.push('Photo is required');
+    // In production: upload file to storage; here, use URL or filename stub
+    const photo = url || (file ? file.name : '');
+    return { errs, out: { photo } };
+  });
+}
+
+function renderTextAndPhoto(tpl, ctx){
+  hideStartPanels(); setHead(tpl);
+
+  // reuse the generic builder you already have:
+  buildForm(tpl, ctx.prefill);
+
+  wireSubmit(tpl, ctx, async () => {
+    const { out, errs } = await collectForm(tpl);
+    return { errs, out };
+  });
+}
+
+function renderFallback(tpl, ctx){
+  // falls back to the generic form
+  renderTextAndPhoto(tpl, ctx);
+}
+
+// 4) Shared submit/cancel wiring
+function wireSubmit(tpl, ctx, collector){
+  const errors = document.getElementById('c-errors');
+  const done = document.getElementById('c-done');
+  const btnSubmit = document.getElementById('c-submit');
+  const btnCancel = document.getElementById('c-cancel');
+
+  btnSubmit.onclick = async () => {
+    errors.textContent = ''; done.textContent = '';
+    const { errs, out } = await collector();
+    if (errs.length) { errors.textContent = errs.join(' • '); return; }
+
+    // >>> your next step (server call / redirect / render proof)
+    // Example:
+    // await fetch('/api/create-job', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ template_id: tpl.template_id, orderId: ctx.orderId, inputs: out }) });
+
+    done.textContent = 'All good — ready to generate!';
+  };
+
+  btnCancel.onclick = () => {
+    document.getElementById('customiser').classList.add('hidden');
+    document.getElementById('templates')?.classList.remove('hidden');
+    document.getElementById('simPanel')?.classList.remove('hidden');
+  };
+}
+</script>
