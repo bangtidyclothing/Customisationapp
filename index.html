@@ -105,31 +105,49 @@
     return records;
   }
 
-  // ---- Field filtering logic (layout + requires_photo/requires_text + hidden/editable) ----
+  // ---- Field filtering using table-level flags ----
   function getVisibleFields(template) {
     const layoutKeys = new Set((template.layout?.elements || []).map(e => e.key).filter(Boolean));
-    const wantsPhoto = template.requires_photo !== false; // default true unless explicitly false
-    const wantsText  = template.requires_text  !== false; // default true unless explicitly false
+
+    // Defaults: visible unless explicitly turned off
+    const wantsPhoto = template.requires_photo !== false;
+    const wantsText  = template.requires_text  !== false;
 
     let fields = Array.isArray(template.fields) ? template.fields : [];
 
     // If layout exists, only keep fields referenced in layout
     if (layoutKeys.size) fields = fields.filter(f => layoutKeys.has(f.key));
 
-    // Respect table-level requires_* flags
+    // Hide by requires_* flags
     fields = fields.filter(f => {
       if (f.type === 'image' && !wantsPhoto) return false;
       if (f.type === 'text'  && !wantsText)  return false;
       return true;
     });
 
-    // Respect per-field visibility overrides (if present)
+    // Respect per-field overrides from fields_json
     fields = fields.filter(f => f.hidden !== true && f.editable !== false);
 
     return fields;
   }
 
-  // ---- Generic builder (uses getVisibleFields) ----
+  // ---- Determine effective 'required' based on optional flags ----
+  function isFieldRequired(template, field) {
+    // Table-level optional flags
+    const optAll   = !!template.optional;
+    const optPhoto = !!template.optional_photo;
+    const optText  = !!template.optional_text;
+
+    // If any applicable optional flag is true -> not required
+    if (optAll) return false;
+    if (field.type === 'image' && optPhoto) return false;
+    if (field.type === 'text'  && optText)  return false;
+
+    // Otherwise fall back to field.required (default=false)
+    return !!field.required;
+  }
+
+  // ---- Generic builder ----
   function buildForm(template, prefill) {
     const form = document.getElementById('c-form');
     form.innerHTML = "";
@@ -138,22 +156,27 @@
 
     fields.forEach(field => {
       const wrap = document.createElement('div');
+      const required = isFieldRequired(template, field);
+
       if (field.type === 'text') {
         const id = `f_${field.key}`;
         wrap.innerHTML = `
           <label for="${id}">${field.label || field.key}</label>
           <input id="${id}" name="${field.key}" type="text"
                  ${field.maxLength ? `maxlength="${field.maxLength}"`:''}
+                 ${required ? 'required' : ''}
                  value="${(prefill?.[field.key]||'').replace(/"/g,'&quot;')}">
           ${field.maxLength ? `<small>Max ${field.maxLength} characters</small>` : ''}
+          ${required ? `<small>(required)</small>` : `<small>(optional)</small>`}
         `;
       } else if (field.type === 'image') {
         const id = `f_${field.key}`;
         wrap.innerHTML = `
           <label>${field.label || field.key}</label>
-          <input id="${id}_url" type="url" placeholder="Paste image URL" value="${prefill?.[field.key]||''}">
+          <input id="${id}_url" type="url" placeholder="Paste image URL" value="${prefill?.[field.key]||''}" ${required ? 'required' : ''}>
           <input id="${id}_file" type="file"
                  accept="${(field.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
+          ${required ? `<small>(required)</small>` : `<small>(optional)</small>`}
         `;
       } else {
         wrap.innerHTML = `<label>${field.label || field.key} (unsupported)</label>`;
@@ -162,17 +185,19 @@
     });
   }
 
-  // ---- Collect form (uses same filtering) ----
+  // ---- Collect form ----
   async function collectForm(template) {
     const out = {};
     const errs = [];
     const fields = getVisibleFields(template);
 
     for (const field of fields) {
+      const required = isFieldRequired(template, field);
+
       if (field.type === 'text') {
         const el = document.getElementById(`f_${field.key}`);
         const val = (el?.value || "").trim();
-        if (field.required && !val) errs.push(`${field.label||field.key} is required`);
+        if (required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
       if (field.type === 'image') {
@@ -180,7 +205,7 @@
         const fileEl = document.getElementById(`f_${field.key}_file`);
         let val = (urlEl?.value || "").trim();
         if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder until upload
-        if (field.required && !val) errs.push(`${field.label||field.key} is required`);
+        if (required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
     }
@@ -274,11 +299,8 @@
     if (!template?.layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; return; }
 
     const baseUrl = (template.layout && template.layout.baseImage) || template.base_image || null;
-
-    // use same visible fields to normalize keys
     const visible = getVisibleFields(template);
     const aligned = normalizeInputsForLayout(template.layout, inputs, visible);
-
     const svg = await composeSVG(template.layout, aligned, baseUrl);
     mount.innerHTML = svg;
   }
