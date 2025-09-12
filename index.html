@@ -32,7 +32,7 @@
     <ul id="templates-list"></ul>
   </div>
 
-  <!-- Simulator -->
+  <!-- Simulator (for iPad testing without console) -->
   <div class="card" id="simPanel">
     <strong>Simulate Jotform</strong>
     <div class="row" style="margin-top:8px;">
@@ -67,26 +67,4 @@
     const h = (location.hash || "").replace(/^#/, "");
     return new URLSearchParams(h);
   }
-  function qp(k){ return getParams().get(k) || ""; }
-
-  // ---- API loader (Airtable → Vercel proxy) ----
-  async function loadTemplates() {
-    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
-    const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
-    if (!res.ok) {
-      console.error("Template fetch failed", res.status);
-      return [];
-    }
-    const data = await res.json();
-    return Array.isArray(data.records) ? data.records : [];
-  }
-
-  // ---- Safe URL helper ----
-  function safeUrl(u){
-    try { const url = new URL(u); return url.href; } catch { return ""; }
-  }
-
-  // ---- Render list ----
-  async function renderList() {
-    const listEl = document.getElementById("templates-list");
-    const statusEl = document.getElementById("templates-s
+  function qp(k){ return getPara
