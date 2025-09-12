@@ -19,7 +19,6 @@
     .hidden { display: none !important; }
     .error { color: #b00020; }
     .success { color: #0f7b0f; }
-    img.preview { max-width: 240px; max-height: 240px; border:1px solid var(--bd); border-radius:8px; margin-top:6px; object-fit: contain; }
   </style>
 </head>
 <body>
@@ -52,7 +51,6 @@
     <div id="c-head"><strong id="c-title"></strong></div>
     <form id="c-form" style="margin-top:8px;"></form>
 
-    <!-- Preview (no download) -->
     <div id="c-preview" style="margin-top:10px;">
       <div style="margin-bottom:6px;"><strong>Preview</strong></div>
       <div id="svgMount" style="border:1px solid #ddd; border-radius:8px; overflow:hidden;"></div>
@@ -107,18 +105,36 @@
     return records;
   }
 
-  // ---- Generic builder (PATCHED: only fields used by layout) ----
+  // ---- Field filtering logic (layout + requires_photo/requires_text + hidden/editable) ----
+  function getVisibleFields(template) {
+    const layoutKeys = new Set((template.layout?.elements || []).map(e => e.key).filter(Boolean));
+    const wantsPhoto = template.requires_photo !== false; // default true unless explicitly false
+    const wantsText  = template.requires_text  !== false; // default true unless explicitly false
+
+    let fields = Array.isArray(template.fields) ? template.fields : [];
+
+    // If layout exists, only keep fields referenced in layout
+    if (layoutKeys.size) fields = fields.filter(f => layoutKeys.has(f.key));
+
+    // Respect table-level requires_* flags
+    fields = fields.filter(f => {
+      if (f.type === 'image' && !wantsPhoto) return false;
+      if (f.type === 'text'  && !wantsText)  return false;
+      return true;
+    });
+
+    // Respect per-field visibility overrides (if present)
+    fields = fields.filter(f => f.hidden !== true && f.editable !== false);
+
+    return fields;
+  }
+
+  // ---- Generic builder (uses getVisibleFields) ----
   function buildForm(template, prefill) {
     const form = document.getElementById('c-form');
     form.innerHTML = "";
 
-    const layoutKeys = new Set(
-      (template.layout?.elements || []).map(e => e.key).filter(Boolean)
-    );
-
-    const fields = Array.isArray(template.fields)
-      ? (layoutKeys.size ? template.fields.filter(f => layoutKeys.has(f.key)) : template.fields)
-      : [];
+    const fields = getVisibleFields(template);
 
     fields.forEach(field => {
       const wrap = document.createElement('div');
@@ -138,7 +154,6 @@
           <input id="${id}_url" type="url" placeholder="Paste image URL" value="${prefill?.[field.key]||''}">
           <input id="${id}_file" type="file"
                  accept="${(field.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
-          <img id="${id}_prev" class="preview" style="display:none;">
         `;
       } else {
         wrap.innerHTML = `<label>${field.label || field.key} (unsupported)</label>`;
@@ -147,18 +162,11 @@
     });
   }
 
-  // ---- Collect form (PATCHED: same filtering as builder) ----
+  // ---- Collect form (uses same filtering) ----
   async function collectForm(template) {
     const out = {};
     const errs = [];
-
-    const layoutKeys = new Set(
-      (template.layout?.elements || []).map(e => e.key).filter(Boolean)
-    );
-
-    const fields = Array.isArray(template.fields)
-      ? (layoutKeys.size ? template.fields.filter(f => layoutKeys.has(f.key)) : template.fields)
-      : [];
+    const fields = getVisibleFields(template);
 
     for (const field of fields) {
       if (field.type === 'text') {
@@ -266,7 +274,11 @@
     if (!template?.layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; return; }
 
     const baseUrl = (template.layout && template.layout.baseImage) || template.base_image || null;
-    const aligned = normalizeInputsForLayout(template.layout, inputs, template.fields || []);
+
+    // use same visible fields to normalize keys
+    const visible = getVisibleFields(template);
+    const aligned = normalizeInputsForLayout(template.layout, inputs, visible);
+
     const svg = await composeSVG(template.layout, aligned, baseUrl);
     mount.innerHTML = svg;
   }
@@ -290,7 +302,8 @@
     // re-render on input changes
     document.getElementById('c-form').addEventListener('input', () => {
       const current = {};
-      (template.fields || []).forEach(f => {
+      const visible = getVisibleFields(template);
+      visible.forEach(f => {
         if (f.type === 'text') {
           const el = document.getElementById(`f_${f.key}`);
           current[f.key] = (el?.value || '').trim();
