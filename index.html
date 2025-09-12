@@ -1,42 +1,112 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Customisation App</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; }
+    #templates ul { padding-left: 18px; }
+    button { padding: 8px 12px; border: 1px solid #ccc; background: #fff; border-radius: 8px; cursor: pointer; }
+    input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; }
+    pre { background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 10px; }
+    .card { margin-top: 1rem; padding: 12px; border: 1px solid #ddd; border-radius: 12px; }
+  </style>
 </head>
 <body>
   <h1>Customisation App</h1>
-  <div id="templates"></div>
+
+  <div id="templates" class="card">
+    <strong>Templates</strong>
+    <div id="templates-status" style="margin-top:6px;color:#666;">Loading…</div>
+    <ul id="templates-list" style="margin-top:6px;"></ul>
+  </div>
+
+  <!-- Debug UI (safe on iPad, no console needed) -->
+  <div class="card">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="btnRaw">Show raw JSON</button>
+      <input id="tplFilter" placeholder="filter by template_id…" />
+      <button id="btnFind">Find</button>
+    </div>
+    <pre id="rawOut" style="white-space:pre-wrap;max-height:50vh;overflow:auto;display:none;margin-top:10px"></pre>
+    <div id="findOut" style="margin-top:10px"></div>
+  </div>
 
   <script>
+  // ---- API loader (points to your kebab/slug endpoint) ----
   async function loadTemplates() {
-    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates";
-
+    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
     const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
     if (!res.ok) {
       console.error("Template fetch failed", res.status);
       return [];
     }
     const data = await res.json();
-    return data.records;
+    return Array.isArray(data.records) ? data.records : [];
   }
 
-  // Example usage: load templates and display names
-  loadTemplates().then(records => {
-    const container = document.getElementById("templates");
+  // ---- Render basic list ----
+  (async function init() {
+    const listEl = document.getElementById("templates-list");
+    const statusEl = document.getElementById("templates-status");
+
+    const records = await loadTemplates();
+
     if (!records.length) {
-      container.textContent = "No templates found";
+      statusEl.textContent = "No templates found";
       return;
     }
-    const list = document.createElement("ul");
+    statusEl.remove();
+
+    const frag = document.createDocumentFragment();
     records.forEach(t => {
       const li = document.createElement("li");
-      li.textContent = `${t.template_id} — ${t.name}`;
-      list.appendChild(li);
+      li.textContent = `${t.template_id} — ${t.name ?? ""}`;
+      frag.appendChild(li);
     });
-    container.appendChild(list);
-  });
+    listEl.appendChild(frag);
+
+    // ---- Debug UI wiring ----
+    const btnRaw = document.getElementById('btnRaw');
+    const rawOut = document.getElementById('rawOut');
+    const input = document.getElementById('tplFilter');
+    const btnFind = document.getElementById('btnFind');
+    const findOut = document.getElementById('findOut');
+
+    btnRaw.addEventListener('click', () => {
+      rawOut.textContent = JSON.stringify({ records }, null, 2);
+      const isHidden = rawOut.style.display === 'none';
+      rawOut.style.display = isHidden ? 'block' : 'none';
+      btnRaw.textContent = isHidden ? 'Hide raw JSON' : 'Show raw JSON';
+    });
+
+    function render(rec) {
+      if (!rec) {
+        findOut.textContent = 'No match.';
+        return;
+      }
+      findOut.innerHTML = `
+        <div><strong>template_id:</strong> ${rec.template_id}</div>
+        <div><strong>TYPE:</strong> ${rec.TYPE ?? ''}</div>
+        <div><strong>sku_pattern:</strong> ${rec.sku_pattern ?? ''}</div>
+        <div><strong>name:</strong> ${rec.name ?? ''}</div>
+        <div><strong>SKU:</strong> ${rec.SKU ?? ''}</div>
+        <div style="margin-top:6px;"><strong>fields:</strong></div>
+        <pre style="white-space:pre-wrap;max-height:30vh;overflow:auto;">${rec.fields ? JSON.stringify(rec.fields, null, 2) : '—'}</pre>
+      `;
+    }
+
+    btnFind.addEventListener('click', () => {
+      const q = (input.value || '').trim().toLowerCase();
+      const match = records.find(r => (r.template_id || '').toLowerCase().includes(q));
+      render(match);
+    });
+
+    // auto-show first item for convenience
+    render(records[0]);
+  })();
   </script>
 </body>
 </html>
