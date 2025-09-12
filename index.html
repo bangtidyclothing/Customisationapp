@@ -36,7 +36,7 @@
   <div class="card" id="simPanel">
     <strong>Simulate Jotform</strong>
     <div class="row" style="margin-top:8px;">
-      <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-photo-12)" />
+      <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-ra816)" />
       <input id="simName" placeholder="name" />
       <input id="simOrder" placeholder="orderId" />
       <input id="simPhoto" placeholder="photo URL (optional)" />
@@ -51,6 +51,16 @@
   <div id="customiser" class="card hidden">
     <div id="c-head"><strong id="c-title"></strong></div>
     <form id="c-form" style="margin-top:8px;"></form>
+
+    <!-- Preview block -->
+    <div id="c-preview" style="margin-top:10px;">
+      <div style="margin-bottom:6px;"><strong>Preview</strong></div>
+      <div id="svgMount" style="border:1px solid #ddd; border-radius:8px; overflow:hidden;"></div>
+      <div class="row" style="margin-top:8px;">
+        <button id="btnDownloadSvg" type="button">Download SVG</button>
+      </div>
+    </div>
+
     <div id="c-errors" class="error" style="margin-top:8px;"></div>
     <div class="row" style="margin-top:10px;">
       <button id="c-submit" type="button">Continue</button>
@@ -156,6 +166,71 @@
     return { out, errs };
   }
 
+  // ---- SVG composer helpers ----
+  function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
+    const rImg = imgW / imgH, rBox = boxW / boxH;
+    let w,h; if (mode==='cover'){ if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; } }
+    else { if (rImg>rBox){ w=boxW; h=w/rImg; } else { h=boxH; w=h*rImg; } }
+    return { x:(boxW-w)/2, y:(boxH-h)/2, w, h };
+  }
+
+  async function composeSVG(layout, inputs){
+    if (!layout) return '';
+    const [cw, ch] = layout.canvasMM || [100,100];
+    const vbW = cw, vbH = ch;
+    const imgInfo = {};
+    async function imgSize(url){
+      if (!url) return null;
+      if (imgInfo[url]) return imgInfo[url];
+      const img = new Image(); img.crossOrigin='anonymous';
+      const p = new Promise(r=>{ img.onload=()=>r({w:img.naturalWidth,h:img.naturalHeight}); img.onerror=()=>r(null); });
+      img.src = url; const s = await p; imgInfo[url]=s; return s;
+    }
+    const parts = [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${cw}mm" height="${ch}mm" viewBox="0 0 ${vbW} ${vbH}">`,
+      `<rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>`
+    ];
+    for (const el of (layout.elements||[])){
+      if (el.type==='image'){
+        const url = inputs[el.key]; if (!url) continue;
+        const box = {x:el.x||0,y:el.y||0,w:el.w||vbW,h:el.h||vbH};
+        const s = await imgSize(url);
+        if (s){ const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
+          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x+fit.x}" y="${box.y+fit.y}" width="${fit.w}" height="${fit.h}" preserveAspectRatio="none"/>`);
+        } else {
+          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" preserveAspectRatio="none"/>`);
+        }
+      }
+      if (el.type==='text'){
+        const val = (inputs[el.key]||'')+''; if (!val) continue;
+        const x=el.x||0, y=el.y||0, w=el.w||vbW, align=el.align||'left';
+        const sizePt = el.sizePt||14, font = el.font||'Arial, sans-serif';
+        const anchor = align==='center'?'middle':(align==='right'?'end':'start');
+        const tx = align==='center'? x+w/2 : (align==='right'? x+w : x);
+        parts.push(`<text x="${tx}" y="${y}" font-family="${font}" font-size="${sizePt}pt" text-anchor="${anchor}" dominant-baseline="hanging">`+
+                   `${val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</text>`);
+      }
+    }
+    parts.push(`</svg>`);
+    return parts.join('');
+  }
+
+  async function renderPreview(layout, inputs){
+    const mount = document.getElementById('svgMount');
+    const btn = document.getElementById('btnDownloadSvg');
+    if (!layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; btn.disabled=true; return; }
+    const svg = await composeSVG(layout, inputs);
+    mount.innerHTML = svg;
+    btn.disabled = false;
+    btn.onclick = () => {
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download=(inputs.template_id||'artwork')+'.svg';
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    };
+  }
+
+  // ---- Workflow ----
   function startWorkflow(template, ctx) {
     document.getElementById('templates')?.classList.add('hidden');
     document.getElementById('simPanel')?.classList.add('hidden');
@@ -165,6 +240,23 @@
     document.getElementById('c-errors').textContent = '';
     document.getElementById('c-done').textContent = '';
     buildForm(template, ctx.prefill);
+
+    // preview initial + on change
+    renderPreview(template.layout, { ...ctx.prefill, template_id: template.template_id });
+    document.getElementById('c-form').addEventListener('input', () => {
+      const current = {};
+      (template.fields || []).forEach(f => {
+        if (f.type === 'text') {
+          const el = document.getElementById(`f_${f.key}`);
+          current[f.key] = (el?.value || '').trim();
+        }
+        if (f.type === 'image') {
+          const urlEl = document.getElementById(`f_${f.key}_url`);
+          current[f.key] = (urlEl?.value || '').trim();
+        }
+      });
+      renderPreview(template.layout, { ...current, template_id: template.template_id });
+    });
 
     document.getElementById('c-submit').onclick = async () => {
       const { out, errs } = await collectForm(template);
