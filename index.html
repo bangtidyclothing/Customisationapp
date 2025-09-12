@@ -111,5 +111,46 @@
     bootFromJotform();
   })();
   </script>
+  <!-- Simulate Jotform redirect (no URL needed) -->
+<div class="card" style="margin-top:12px;">
+  <strong>Simulate Jotform</strong>
+  <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+    <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-photo-12)" style="flex:1; min-width:260px; padding:8px; border:1px solid #ccc; border-radius:8px;">
+    <input id="simName" placeholder="name" style="padding:8px; border:1px solid #ccc; border-radius:8px;">
+    <input id="simOrder" placeholder="orderId" style="padding:8px; border:1px solid #ccc; border-radius:8px;">
+    <input id="simPhoto" placeholder="photo URL (optional)" style="flex:1; min-width:260px; padding:8px; border:1px solid #ccc; border-radius:8px;">
+    <button id="simBtn" style="padding:8px 12px; border:1px solid #ccc; background:#fff; border-radius:8px;">Start</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const btn = $('simBtn');
+
+  btn.addEventListener('click', async () => {
+    const templateId = $('simTpl').value.trim();
+    const name = $('simName').value.trim();
+    const orderId = $('simOrder').value.trim();
+    const photo = $('simPhoto').value.trim();
+
+    if (!templateId) { alert('Enter a template_id'); return; }
+
+    const templates = await loadTemplates();
+    const tpl = templates.find(t => (t.template_id || '').toLowerCase() === templateId.toLowerCase());
+    if (!tpl) { alert('Template not found. Copy one from the list above.'); return; }
+
+    const prefill = {};
+    if (Array.isArray(tpl.fields)) {
+      for (const f of tpl.fields) {
+        if (f.key === 'text') prefill.text = name || '';
+        if (f.key === 'photo' && photo) prefill.photo = photo;
+      }
+    }
+    startWorkflow(tpl, { orderId, prefill });
+  });
+})();
+</script>
+
 </body>
 </html>
