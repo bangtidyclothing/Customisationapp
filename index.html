@@ -1,179 +1,42 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Bang Tidy – Customisation App</title>
-<style>
-  body{font-family:system-ui,sans-serif;margin:24px;color:#111}
-  .card{padding:16px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:16px}
-  a{color:#2563eb;text-decoration:none}.muted{color:#6b7280}ul{padding-left:18px}
-  #debug{position:fixed;right:12px;bottom:12px;width:min(56ch,92vw);max-height:42vh;overflow:auto;
-         background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:10px;padding:10px;
-         font:12px/1.4 ui-monospace;box-shadow:0 8px 30px #0004}
-  #debug b{color:#93c5fd}
-</style>
+  <meta charset="UTF-8">
+  <title>Customisation App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
-<h1>Bang Tidy – Customisation Framework</h1>
-<div id="app" class="card">Loading…</div>
-<div id="debug" aria-live="polite"><b>Debug</b><br/></div>
+  <h1>Customisation App</h1>
+  <div id="templates"></div>
 
-<script>
-/* ===== Debug box mirrors console ===== */
-(function(){
-  const box = document.getElementById('debug');
-  const add = (label, args) => {
-    const msg = [...args].map(v => { try { return typeof v==='string'? v : JSON.stringify(v); } catch { return String(v); } }).join(' ');
-    const line = document.createElement('div'); line.innerHTML = `<b>${label}</b> ${msg}`;
-    box.appendChild(line); box.scrollTop = box.scrollHeight;
-  };
-  ['log','info','warn','error'].forEach(fn=>{
-    const orig = console[fn].bind(console);
-    console[fn] = (...a)=>{ add(fn.toUpperCase()+':', a); orig(...a); };
-  });
-  window.onerror = (msg, src, line, col, err) => console.error('[onerror]', msg, src, line+':'+col, err && err.stack);
-  window.addEventListener('unhandledrejection', e => console.error('[unhandled]', e.reason));
-})();
+  <script>
+  async function loadTemplates() {
+    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates";
 
-/* ===== Helpers ===== */
-const $ = id => document.getElementById(id);
-const norm  = s => (s ?? '').toString().trim();
-const normU = s => norm(s).toUpperCase();
-
-// One-time cache-buster per path+hash
-(function forceOneRefresh(){
-  const key = 'bt_refreshed_' + location.pathname + '|' + (location.hash || '');
-  if (!sessionStorage.getItem(key)) {
-    const url = new URL(location.href);
-    url.searchParams.set('v', Date.now().toString());
-    sessionStorage.setItem(key, '1');
-    console.log('[refresh] add cache-buster and reload:', url.toString());
-    location.replace(url.toString());
+    const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
+    if (!res.ok) {
+      console.error("Template fetch failed", res.status);
+      return [];
+    }
+    const data = await res.json();
+    return data.records;
   }
-})();
 
-function getHash(){
-  const h = (location.hash || '').slice(1);
-  console.log('[router] hash', location.hash, 'parsed', h);
-  return h;
-}
-
-/* ===== Local JSON loader (./data/templates.json) ===== */
-function localJsonUrl(){
-  const u = new URL('./data/templates.json', location.href);
-  u.searchParams.set('v', Date.now().toString()); // cache-bust
-  return u.toString();
-}
-function sanitizeJson(txt){
-  return txt.replace(/^\uFEFF/, '').replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/,\s*(?=[}\]])/g, '');
-}
-async function loadTemplates(){
-  const url = localJsonUrl();
-  console.log('[data] fetching', url);
-  const res = await fetch(url, { cache: 'no-store' });
-  console.log('[data] status', res.status);
-  const raw = await res.text();
-  console.log('[data] first300', raw.slice(0,300));
-  if (!res.ok) throw new Error('templates.json not found');
-  const txt = sanitizeJson(raw);
-  const json = JSON.parse(txt);
-  const skus  = (json.records||[]).map(r => r.SKU || r.sku);
-  const pairs = (json.records||[]).map(r => `${r.TYPE}/${r.sku_pattern}`);
-  console.log('[data] records', json.records?.length || 0, '| SKUs =', skus, '| pairs =', pairs);
-  return json;
-}
-
-/* ===== Views ===== */
-async function renderHome(){
-  $('app').innerHTML = `
-    <p>Welcome 👋</p>
-    <p>Try <a href="#/catalog">#/catalog</a>, <code>#/sku/CO-CARD-PHOTO-12</code>, or <code>#/t/beer-mat/photo-beer-mat-12</code>.</p>`;
-}
-
-async function renderCatalog(){
-  const app = $('app'); app.innerHTML = "<p class='muted'>Loading catalog…</p>";
-  try{
-    const data = await loadTemplates();
-    if (!data.records?.length){ app.innerHTML = "<p>No templates found.</p>"; return; }
-    const items = data.records.map(r =>
-      `<li><a href="#/t/${encodeURIComponent(r.TYPE)}/${encodeURIComponent(r.sku_pattern)}">${r.name}</a>
-         <span class="muted">(${r.SKU})</span></li>`).join('');
-    app.innerHTML = `<div class="card"><h2>Catalog</h2><ul>${items}</ul></div>`;
-  }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
-}
-
-async function renderSku(skuRaw){
-  const app = $('app'); app.innerHTML = "<p class='muted'>Resolving SKU…</p>";
-  try{
-    const sku = normU(skuRaw);
-    const data = await loadTemplates();
-    const available = (data.records||[]).map(r => normU(r.SKU || r.sku));
-    console.log('[sku] looking for', sku, 'in', available);
-    const rec = (data.records||[]).find(r => normU(r.SKU || r.sku) === sku);
-    if (!rec){
-      app.innerHTML = `<div class="card">
-        <p><b>Template not found for that SKU.</b></p>
-        <p class="muted">Asked: ${skuRaw}</p>
-        <p>Available SKUs:</p>
-        <ul>${available.map(x=>`<li>${x}</li>`).join('')}</ul>
-        <p><a href="#/catalog">← Back to catalog</a></p>
-      </div>`;
+  // Example usage: load templates and display names
+  loadTemplates().then(records => {
+    const container = document.getElementById("templates");
+    if (!records.length) {
+      container.textContent = "No templates found";
       return;
     }
-    const target = `#/t/${rec.TYPE}/${rec.sku_pattern}`;
-    console.log('[sku] resolved', skuRaw, '→', target);
-    location.hash = target;
-  }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
-}
-
-async function renderTemplate(typeRaw, slugRaw){
-  const app = $('app'); app.innerHTML = "<p class='muted'>Loading template…</p>";
-  try{
-    const type = norm(typeRaw);
-    const slug = norm(slugRaw);
-    const data = await loadTemplates();
-    console.log('[template] seeking', `${type}/${slug}`);
-    console.warn('[template] available', (data.records||[]).map(r => `${r.TYPE}/${r.sku_pattern}`));
-    const rec = (data.records||[]).find(r => r.TYPE === type && r.sku_pattern === slug);
-    if (!rec){
-      app.innerHTML = `<div class="card">
-        <p><b>Template not found.</b></p>
-        <p class="muted">Asked: ${typeRaw} / ${slugRaw}</p>
-        <p>Available:</p>
-        <ul>${(data.records||[]).map(r=>`<li>${r.TYPE}/${r.sku_pattern}</li>`).join('')}</ul>
-        <p><a href="#/catalog">← Back to catalog</a></p>
-      </div>`;
-      return;
-    }
-    app.innerHTML = `
-      <div class="card">
-        <h2>${rec.name}</h2>
-        <p class="muted">SKU: ${rec.SKU}</p>
-        <p>Inputs:</p>
-        <ul>${(rec.fields||[]).map(f=>`<li><strong>${f.label||f.key}</strong> – ${f.type}</li>`).join('')}</ul>
-        <p><a href="#/catalog">← Back to catalog</a></p>
-      </div>`;
-  }catch(e){ console.error(e); app.innerHTML = `<p style="color:#b91c1c"><b>Error:</b> ${e.message}</p>`; }
-}
-
-/* ===== Router ===== */
-async function router(){
-  const h = getHash();
-  const segs = h.split('/').filter(Boolean);
-  console.log('[router] segs', segs);
-  if (!h) return renderHome();
-  if (segs[0] === 'catalog') return renderCatalog();
-  if (segs[0] === 'sku' && segs[1]) return renderSku(decodeURIComponent(segs[1]));
-  if (segs[0] === 't' && segs[1] && segs[2]) return renderTemplate(decodeURIComponent(segs[1]), decodeURIComponent(segs[2]));
-  $('app').innerHTML = "<p>404 – Page not found</p>";
-}
-
-window.addEventListener('hashchange', router);
-window.addEventListener('DOMContentLoaded', () => {
-  router();
-  setTimeout(router, 0);
-  setTimeout(router, 50);
-});
-</script>
+    const list = document.createElement("ul");
+    records.forEach(t => {
+      const li = document.createElement("li");
+      li.textContent = `${t.template_id} — ${t.name}`;
+      list.appendChild(li);
+    });
+    container.appendChild(list);
+  });
+  </script>
 </body>
 </html>
