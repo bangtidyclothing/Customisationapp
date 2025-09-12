@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Customisation App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; }
+    #templates ul { padding-left: 18px; }
+    button { padding: 8px 12px; border: 1px solid #ccc; background: #fff; border-radius: 8px; cursor: pointer; }
+    input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; }
+    pre { background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 10px; }
+    .card { margin-top: 1rem; padding: 12px; border: 1px solid #ddd; border-radius: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Customisation App</h1>
+
+  <div id="templates" class="card">
+    <strong>Templates</strong>
+    <div id="templates-status" style="margin-top:6px;color:#666;">Loading…</div>
+    <ul id="templates-list" style="margin-top:6px;"></ul>
+  </div>
+
+  <script>
+  // ---- Params reader (works with query or hash) ----
+  function getParams() {
+    const qs = new URLSearchParams(location.search);
+    if (qs.toString()) return qs;
+    const h = (location.hash || "").replace(/^#/, "");
+    return new URLSearchParams(h);
+  }
+  function qp(k){ return getParams().get(k) || ""; }
+
+  // ---- API loader ----
+  async function loadTemplates() {
+    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
+    const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
+    if (!res.ok) {
+      console.error("Template fetch failed", res.status);
+      return [];
+    }
+    const data = await res.json();
+    return Array.isArray(data.records) ? data.records : [];
+  }
+
+  // ---- Boot from Jotform redirect ----
+  function safeUrl(u){
+    try { const url = new URL(u); return url.href; } catch { return ""; }
+  }
+
+  async function bootFromJotform() {
+    const templateId = qp("template_id");
+    const orderId    = qp("orderId");
+    const name       = qp("name");
+    const photo      = safeUrl(qp("photo"));
+
+    if (!templateId) return;
+
+    const templates = await loadTemplates();
+    const tpl = templates.find(t => (t.template_id || "").toLowerCase() === templateId.toLowerCase());
+    if (!tpl) return;
+
+    const prefill = {};
+    if (Array.isArray(tpl.fields)) {
+      for (const f of tpl.fields) {
+        if (f.key === "text")  prefill.text  = name || "";
+        if (f.key === "photo" && photo) prefill.photo = photo;
+      }
+    }
+
+    startWorkflow(tpl, { orderId, prefill });
+  }
+
+  // ---- Example workflow stub ----
+  function startWorkflow(template, ctx) {
+    const box = document.createElement("div");
+    box.className = "card";
+    box.innerHTML = `
+      <strong>Auto-started:</strong> ${template.template_id} — ${template.name}<br/>
+      <div>orderId: ${ctx.orderId || "—"}</div>
+      <div style="margin-top:6px;"><strong>prefill:</strong></div>
+      <pre>${JSON.stringify(ctx.prefill, null, 2)}</pre>
+    `;
+    document.body.appendChild(box);
+  }
+
+  // ---- Render basic list & trigger auto-start if params exist ----
+  (async function init() {
+    const listEl = document.getElementById("templates-list");
+    const statusEl = document.getElementById("templates-status");
+
+    const records = await loadTemplates();
+
+    if (!records.length) {
+      statusEl.textContent = "No templates found";
+      return;
+    }
+    statusEl.remove();
+
+    const frag = document.createDocumentFragment();
+    records.forEach(t => {
+      const li = document.createElement("li");
+      li.textContent = `${t.template_id} — ${t.name ?? ""}`;
+      frag.appendChild(li);
+    });
+    listEl.appendChild(frag);
+
+    // trigger workflow if coming from Jotform
+    bootFromJotform();
+  })();
+  </script>
+</body>
+</html>
