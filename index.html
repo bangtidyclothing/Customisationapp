@@ -23,19 +23,17 @@
     <ul id="templates-list" style="margin-top:6px;"></ul>
   </div>
 
-  <!-- Debug UI (safe on iPad, no console needed) -->
-  <div class="card">
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <button id="btnRaw">Show raw JSON</button>
-      <input id="tplFilter" placeholder="filter by template_id…" />
-      <button id="btnFind">Find</button>
-    </div>
-    <pre id="rawOut" style="white-space:pre-wrap;max-height:50vh;overflow:auto;display:none;margin-top:10px"></pre>
-    <div id="findOut" style="margin-top:10px"></div>
-  </div>
-
   <script>
-  // ---- API loader (points to your kebab/slug endpoint) ----
+  // ---- Params reader (works with query or hash) ----
+  function getParams() {
+    const qs = new URLSearchParams(location.search);
+    if (qs.toString()) return qs;
+    const h = (location.hash || "").replace(/^#/, "");
+    return new URLSearchParams(h);
+  }
+  function qp(k){ return getParams().get(k) || ""; }
+
+  // ---- API loader ----
   async function loadTemplates() {
     const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
     const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
@@ -47,7 +45,48 @@
     return Array.isArray(data.records) ? data.records : [];
   }
 
-  // ---- Render basic list ----
+  // ---- Boot from Jotform redirect ----
+  function safeUrl(u){
+    try { const url = new URL(u); return url.href; } catch { return ""; }
+  }
+
+  async function bootFromJotform() {
+    const templateId = qp("template_id");
+    const orderId    = qp("orderId");
+    const name       = qp("name");
+    const photo      = safeUrl(qp("photo"));
+
+    if (!templateId) return;
+
+    const templates = await loadTemplates();
+    const tpl = templates.find(t => (t.template_id || "").toLowerCase() === templateId.toLowerCase());
+    if (!tpl) return;
+
+    const prefill = {};
+    if (Array.isArray(tpl.fields)) {
+      for (const f of tpl.fields) {
+        if (f.key === "text")  prefill.text  = name || "";
+        if (f.key === "photo" && photo) prefill.photo = photo;
+      }
+    }
+
+    startWorkflow(tpl, { orderId, prefill });
+  }
+
+  // ---- Example workflow stub ----
+  function startWorkflow(template, ctx) {
+    const box = document.createElement("div");
+    box.className = "card";
+    box.innerHTML = `
+      <strong>Auto-started:</strong> ${template.template_id} — ${template.name}<br/>
+      <div>orderId: ${ctx.orderId || "—"}</div>
+      <div style="margin-top:6px;"><strong>prefill:</strong></div>
+      <pre>${JSON.stringify(ctx.prefill, null, 2)}</pre>
+    `;
+    document.body.appendChild(box);
+  }
+
+  // ---- Render basic list & trigger auto-start if params exist ----
   (async function init() {
     const listEl = document.getElementById("templates-list");
     const statusEl = document.getElementById("templates-status");
@@ -68,44 +107,8 @@
     });
     listEl.appendChild(frag);
 
-    // ---- Debug UI wiring ----
-    const btnRaw = document.getElementById('btnRaw');
-    const rawOut = document.getElementById('rawOut');
-    const input = document.getElementById('tplFilter');
-    const btnFind = document.getElementById('btnFind');
-    const findOut = document.getElementById('findOut');
-
-    btnRaw.addEventListener('click', () => {
-      rawOut.textContent = JSON.stringify({ records }, null, 2);
-      const isHidden = rawOut.style.display === 'none';
-      rawOut.style.display = isHidden ? 'block' : 'none';
-      btnRaw.textContent = isHidden ? 'Hide raw JSON' : 'Show raw JSON';
-    });
-
-    function render(rec) {
-      if (!rec) {
-        findOut.textContent = 'No match.';
-        return;
-      }
-      findOut.innerHTML = `
-        <div><strong>template_id:</strong> ${rec.template_id}</div>
-        <div><strong>TYPE:</strong> ${rec.TYPE ?? ''}</div>
-        <div><strong>sku_pattern:</strong> ${rec.sku_pattern ?? ''}</div>
-        <div><strong>name:</strong> ${rec.name ?? ''}</div>
-        <div><strong>SKU:</strong> ${rec.SKU ?? ''}</div>
-        <div style="margin-top:6px;"><strong>fields:</strong></div>
-        <pre style="white-space:pre-wrap;max-height:30vh;overflow:auto;">${rec.fields ? JSON.stringify(rec.fields, null, 2) : '—'}</pre>
-      `;
-    }
-
-    btnFind.addEventListener('click', () => {
-      const q = (input.value || '').trim().toLowerCase();
-      const match = records.find(r => (r.template_id || '').toLowerCase().includes(q));
-      render(match);
-    });
-
-    // auto-show first item for convenience
-    render(records[0]);
+    // trigger workflow if coming from Jotform
+    bootFromJotform();
   })();
   </script>
 </body>
