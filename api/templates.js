@@ -1,9 +1,9 @@
 // /api/templates.js
-// Returns { records: [...] } in your legacy shape + parsed `layout`
+// Returns { records: [...] } in legacy shape + parsed `layout` + `base_image`
 // Query params:
-//   ?slug=1            -> template_id becomes kebab-case and prefixed with "tpl-"
-//   ?type=kebab        -> TYPE becomes kebab-case (else left as-is)
-// CORS is restricted by ALLOWED_ORIGIN env (set to https://bangtidyclothing.github.io)
+//   ?slug=1            -> template_id kebab + "tpl-" prefix
+//   ?type=kebab        -> TYPE kebab-case
+// CORS origin via ALLOWED_ORIGIN (e.g. https://bangtidyclothing.github.io)
 
 export default async function handler(req, res) {
   const q = req.query || {};
@@ -23,26 +23,28 @@ export default async function handler(req, res) {
     AIRTABLE_BASE_ID,
     AIRTABLE_TABLE_NAME = "Templates",
   } = process.env;
-
   if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID) {
     return res.status(500).json({ error: "Missing env variables" });
   }
 
   const base = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE_ID)}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
-  const params = new URLSearchParams({
-    filterByFormula: "AND({active}=TRUE())",
-    pageSize: "100",
-  });
+  const params = new URLSearchParams({ filterByFormula: "AND({active}=TRUE())", pageSize: "100" });
   const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
 
   const clean = (s) => (typeof s === "string" ? s.trim() : s);
   const toKebab = (s) =>
     clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  const bestId = (f) =>
-    clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+  const bestId = (f) => clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
 
-  // ---- mapper (legacy shape + parsed layout) ----
+  // Extract a URL from string or Airtable "attachment" array
+  const firstUrl = (v) => {
+    if (!v) return null;
+    if (typeof v === "string") return clean(v) || null;
+    if (Array.isArray(v) && v.length && v[0] && v[0].url) return v[0].url;
+    return null;
+  };
+
   const mapLegacy = (rec) => {
     const f = rec.fields || {};
 
@@ -59,6 +61,13 @@ export default async function handler(req, res) {
       if (f.Layout_spec && typeof f.Layout_spec === "string") layout = JSON.parse(f.Layout_spec);
       else if (f.Layout_spec && typeof f.Layout_spec === "object") layout = f.Layout_spec;
     } catch (_) {}
+
+    // base image: support both `base_image` and `Base_image`, fallback to `hero`
+    const base_image =
+      firstUrl(f.base_image) ||
+      firstUrl(f.Base_image) ||
+      firstUrl(f.hero) ||
+      null;
 
     // template_id
     let id = bestId(f);
@@ -79,7 +88,8 @@ export default async function handler(req, res) {
       SKU: clean(f.SKU) ?? null,
     };
     if (fields !== undefined) out.fields = fields;
-    if (layout !== undefined) out.layout = layout; // << add parsed layout
+    if (layout !== undefined) out.layout = layout;
+    if (base_image !== null) out.base_image = base_image; // <<< ensures lower/upper-case field names work
     return out;
   };
 
