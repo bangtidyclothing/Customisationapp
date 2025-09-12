@@ -1,4 +1,9 @@
+// /api/templates.js
 export default async function handler(req, res) {
+  const q = req.query || {};
+  const slugifyId = q.slug === "1" || q.slug === "true";
+  const kebabType = q.type === "kebab"; // kebab-case TYPE
+
   res.setHeader("access-control-allow-origin", process.env.ALLOWED_ORIGIN || "*");
   res.setHeader("access-control-allow-methods", "GET, OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type");
@@ -11,40 +16,57 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Missing env variables" });
   }
 
-  async function fetchAll() {
-    const base = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE_ID)}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
-    const params = new URLSearchParams({ filterByFormula: "AND({active}=TRUE())", pageSize: "100" });
-    const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
+  const base = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE_ID)}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
+  const params = new URLSearchParams({ filterByFormula: "AND({active}=TRUE())", pageSize: "100" });
+  const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
 
+  const clean = (s) => (typeof s === "string" ? s.trim() : s);
+  const toKebab = (s) =>
+    clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+  const bestId = (f) => clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+
+  const mapLegacy = (rec) => {
+    const f = rec.fields || {};
+
+    // Parse fields_json into an array/object if present
+    let fields;
+    try {
+      if (Array.isArray(f.fields_json)) fields = f.fields_json;
+      else if (typeof f.fields_json === "string") fields = JSON.parse(f.fields_json);
+    } catch (_) { /* ignore bad JSON */ }
+
+    // template_id
+    let id = bestId(f);
+    if (slugifyId && id) {
+      const slug = toKebab(id);
+      id = slug.startsWith("tpl-") ? slug : `tpl-${slug}`;
+    }
+
+    // TYPE
+    let typeOut = clean(f.TYPE ?? null);
+    if (kebabType && typeOut) typeOut = toKebab(typeOut);
+
+    // Build EXACT legacy-shaped object (no extras)
+    const out = {
+      template_id: id,
+      TYPE: typeOut ?? null,
+      sku_pattern: clean(f.sku_pattern) ?? null,
+      name: clean(f.name) ?? null,
+      SKU: clean(f.SKU) ?? null
+    };
+    if (fields !== undefined) out.fields = fields; // include only if present
+    return out;
+  };
+
+  async function fetchAll() {
     let url = `${base}?${params.toString()}`;
     const out = [];
-
     while (url) {
       const r = await fetch(url, { headers });
       if (!r.ok) throw new Error(`Airtable ${r.status}`);
       const body = await r.json();
-
-      (body.records || []).forEach((rec) => {
-        const f = rec.fields || {};
-        const parse = (val) => {
-          if (!val || typeof val !== "string") return undefined;
-          try { return JSON.parse(val); } catch { return undefined; }
-        };
-        out.push({
-          template_id: f.template_id ?? rec.id,
-          TYPE: f.TYPE ?? null,
-          sku_pattern: f.sku_pattern ?? null,
-          name: f.name ?? null,
-          SKU: f.SKU ?? null,
-          fields: parse(f.fields_json),
-          hero: f.hero ?? null,
-          units_per_sheet: typeof f.units_per_sheet === "number" ? f.units_per_sheet : undefined,
-          print_spec: parse(f.print_spec_json),
-          imposition: parse(f.imposition_json),
-          output_pattern: f.output_pattern ?? null
-        });
-      });
-
+      (body.records || []).forEach((rec) => out.push(mapLegacy(rec)));
       url = body.offset ? `${base}?${params.toString()}&offset=${body.offset}` : "";
     }
     return out;
