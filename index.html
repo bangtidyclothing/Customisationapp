@@ -52,13 +52,10 @@
     <div id="c-head"><strong id="c-title"></strong></div>
     <form id="c-form" style="margin-top:8px;"></form>
 
-    <!-- Preview block -->
+    <!-- Preview block (no download) -->
     <div id="c-preview" style="margin-top:10px;">
       <div style="margin-bottom:6px;"><strong>Preview</strong></div>
       <div id="svgMount" style="border:1px solid #ddd; border-radius:8px; overflow:hidden;"></div>
-      <div class="row" style="margin-top:8px;">
-        <button id="btnDownloadSvg" type="button">Download SVG</button>
-      </div>
     </div>
 
     <div id="c-errors" class="error" style="margin-top:8px;"></div>
@@ -166,6 +163,23 @@
     return { out, errs };
   }
 
+  // ---- Helpers to align form inputs with layout keys ----
+  function normalizeInputsForLayout(layout, inputs, fields){
+    const out = { ...inputs };
+    const textKeys  = (fields || []).filter(f => f.type === 'text').map(f => f.key);
+    const imageKeys = (fields || []).filter(f => f.type === 'image').map(f => f.key);
+
+    (layout?.elements || []).forEach(el => {
+      if (el.type === 'text' && !out[el.key]) {
+        if (textKeys.length === 1) out[el.key] = inputs[textKeys[0]] || '';
+      }
+      if (el.type === 'image' && !out[el.key]) {
+        if (imageKeys.length === 1) out[el.key] = inputs[imageKeys[0]] || '';
+      }
+    });
+    return out;
+  }
+
   // ---- SVG composer helpers (with base image) ----
   function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
     const rImg = imgW / imgH, rBox = boxW / boxH;
@@ -231,19 +245,18 @@
     return parts.join('');
   }
 
-  async function renderPreview(layout, inputs, baseUrl){
+  async function renderPreview(template, inputs){
     const mount = document.getElementById('svgMount');
-    const btn = document.getElementById('btnDownloadSvg');
-    if (!layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; btn.disabled=true; return; }
-    const svg = await composeSVG(layout, inputs, baseUrl);
+    if (!template?.layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; return; }
+
+    // prefer layout.baseImage, else API base_image
+    const baseUrl = (template.layout && template.layout.baseImage) || template.base_image || null;
+
+    // align inputs with layout keys (handles name/text mismatch)
+    const aligned = normalizeInputsForLayout(template.layout, inputs, template.fields || []);
+
+    const svg = await composeSVG(template.layout, aligned, baseUrl);
     mount.innerHTML = svg;
-    btn.disabled = false;
-    btn.onclick = () => {
-      const blob = new Blob([svg], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href=url; a.download=(inputs.template_id||'artwork')+'.svg';
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    };
   }
 
   // ---- Workflow ----
@@ -257,11 +270,10 @@
     document.getElementById('c-done').textContent = '';
     buildForm(template, ctx.prefill);
 
-    // base image (prefer layout.baseImage, else API base_image)
-    const baseUrl = (template.layout && template.layout.baseImage) || template.base_image || null;
+    // initial preview
+    renderPreview(template, { ...ctx.prefill, template_id: template.template_id });
 
-    // preview initial + on change
-    renderPreview(template.layout, { ...ctx.prefill, template_id: template.template_id }, baseUrl);
+    // re-render on input changes
     document.getElementById('c-form').addEventListener('input', () => {
       const current = {};
       (template.fields || []).forEach(f => {
@@ -274,7 +286,7 @@
           current[f.key] = (urlEl?.value || '').trim();
         }
       });
-      renderPreview(template.layout, { ...current, template_id: template.template_id }, baseUrl);
+      renderPreview(template, { ...current, template_id: template.template_id });
     });
 
     document.getElementById('c-submit').onclick = async () => {
