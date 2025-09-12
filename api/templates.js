@@ -1,6 +1,6 @@
 // /api/templates.js
 // Returns { records: [...] } in legacy shape + parsed `layout` + `base_image`
-// Also surfaces requires_photo / requires_text from Airtable.
+// Also surfaces requires_* and optional_* flags from Airtable.
 
 export default async function handler(req, res) {
   const q = req.query || {};
@@ -29,16 +29,13 @@ export default async function handler(req, res) {
   const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
 
   const clean = (s) => (typeof s === "string" ? s.trim() : s);
-  const toKebab = (s) =>
-    clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-
-  const bestId = (f) =>
-    clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+  const toKebab = (s) => clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const bestId = (f) => clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
 
   const firstUrl = (v) => {
     if (!v) return null;
     if (typeof v === "string") return clean(v) || null;
-    if (Array.isArray(v) && v.length && v[0] && v[0].url) return v[0].url;
+    if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
     return null;
   };
 
@@ -52,29 +49,31 @@ export default async function handler(req, res) {
       else if (typeof f.fields_json === "string") fields = JSON.parse(f.fields_json);
     } catch (_) {}
 
-    // Layout_spec
+    // layout
     let layout;
     try {
       if (f.Layout_spec && typeof f.Layout_spec === "string") layout = JSON.parse(f.Layout_spec);
       else if (f.Layout_spec && typeof f.Layout_spec === "object") layout = f.Layout_spec;
     } catch (_) {}
 
-    // Base image from base_image / Base_image / hero
-    const base_image =
-      firstUrl(f.base_image) || firstUrl(f.Base_image) || firstUrl(f.hero) || null;
+    // images
+    const base_image = firstUrl(f.base_image) || firstUrl(f.Base_image) || firstUrl(f.hero) || null;
 
-    // requires flags (booleans)
-    const requires_photo = f.requires_photo === true || f.requires_photo === "true";
-    const requires_text  = f.requires_text  === true || f.requires_text  === "true";
+    // flags (accept true/false or "true"/"false")
+    const asBool = (v) => v === true || v === "true";
+    const requires_photo = asBool(f.requires_photo) || false === f.requires_photo ? asBool(f.requires_photo) : true; // default true
+    const requires_text  = asBool(f.requires_text)  || false === f.requires_text  ? asBool(f.requires_text)  : true; // default true
 
-    // template_id
+    const optional_photo = asBool(f.optional_photo) || false; // default false
+    const optional_text  = asBool(f.optional_text)  || false; // default false
+    const optional_all   = asBool(f.optional)       || false; // default false
+
+    // id/type
     let id = bestId(f);
     if (slugifyId && id) {
       const slug = toKebab(id);
       id = slug.startsWith("tpl-") ? slug : `tpl-${slug}`;
     }
-
-    // TYPE
     let typeOut = clean(f.TYPE ?? null);
     if (kebabType && typeOut) typeOut = toKebab(typeOut);
 
@@ -84,9 +83,15 @@ export default async function handler(req, res) {
       sku_pattern: clean(f.sku_pattern) ?? null,
       name: clean(f.name) ?? null,
       SKU: clean(f.SKU) ?? null,
+
+      // flags to drive UI
       requires_photo,
       requires_text,
+      optional_photo,
+      optional_text,
+      optional: optional_all,
     };
+
     if (fields !== undefined) out.fields = fields;
     if (layout !== undefined) out.layout = layout;
     if (base_image !== null) out.base_image = base_image;
