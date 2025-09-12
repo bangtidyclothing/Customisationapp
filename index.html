@@ -37,7 +37,7 @@
 
 /* ===== Helpers ===== */
 const $ = id => document.getElementById(id);
-const norm = s => (s ?? '').toString().trim();
+const norm  = s => (s ?? '').toString().trim();
 const normU = s => norm(s).toUpperCase();
 
 // One-time cache-buster per path+hash
@@ -58,119 +58,30 @@ function getHash(){
   return h;
 }
 
-// RAW GitHub URL
-function templatesUrl(){
-  const u = new URL('https://raw.githubusercontent.com/bangtidyclothing/Customisationapp/main/data/templates.json');
-  u.searchParams.set('v', Date.now().toString());
+/* ===== Local JSON loader (./data/templates.json) ===== */
+function localJsonUrl(){
+  const u = new URL('./data/templates.json', location.href);
+  u.searchParams.set('v', Date.now().toString()); // cache-bust
   return u.toString();
 }
-
-// Fallback data (base64) – guaranteed valid
-const FALLBACK_B64 = btoa(JSON.stringify({
-  records: [
-    {
-      template_id: "tpl-co-card-photo-12",
-      TYPE: "beer-mat",
-      sku_pattern: "photo-beer-mat-12",
-      name: "Photo Beer Mat (12 pack)",
-      SKU: "CO-CARD-PHOTO-12",
-      fields: [
-        { key: "photo", type: "image", label: "Upload your photo", required: true,
-          constraints: { minPx: [1000,1000], aspect: "square", formats: ["jpg","jpeg","png"], maxMB: 10 } },
-        { key: "text", type: "text", label: "Add optional text", required: false, maxLength: 30 }
-      ]
-    }
-  ]
-}));
-
 function sanitizeJson(txt){
-  return txt
-    .replace(/^\uFEFF/, '')                // BOM
-    .replace(/[\u201C\u201D]/g, '"')       // smart double quotes
-    .replace(/[\u2018\u2019]/g, "'")       // smart single quotes
-    .replace(/,\s*(?=[}\]])/g, '');        // trailing commas
+  return txt.replace(/^\uFEFF/, '').replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/,\s*(?=[}\]])/g, '');
 }
-
-// 1) Put your Airtable "Download CSV" link here:
-const AIRTABLE_CSV = 'https://airtable.com/appITTqqFG2y6USGq/shrVBLO80yoKUrIqZ/tblT3wQrUC5bVLNgi/viwL0cNUeL89MIUHp';
-
-// Small CSV parser that handles quotes/commas/newlines
-function parseCSV(csv) {
-  const rows = [];
-  let i = 0, field = '', row = [], inQuotes = false;
-  while (i < csv.length) {
-    const c = csv[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (csv[i+1] === '"') { field += '"'; i++; } // escaped quote
-        else { inQuotes = false; }
-      } else {
-        field += c;
-      }
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\n') { row.push(field); rows.push(row); row = []; field=''; }
-      else if (c === '\r') { /* ignore */ }
-      else field += c;
-    }
-    i++;
-  }
-  // flush last field/row
-  row.push(field); rows.push(row);
-  // first row is header
-  const header = rows.shift().map(h => h.trim());
-  return rows.filter(r => r.length>1 && r.some(v => v && v.trim()!=='')).map(r => {
-    const obj = {};
-    header.forEach((h, idx) => obj[h] = r[idx] ?? '');
-    return obj;
-  });
-}
-
-// 2) REPLACE your loadTemplates() with this:
 async function loadTemplates(){
-  const url = new URL(https://airtable.com/appITTqqFG2y6USGq/shrVBLO80yoKUrIqZ/tblT3wQrUC5bVLNgi/viwL0cNUeL89MIUHp);
-  url.searchParams.set('v', Date.now().toString()); // cache-bust
-  console.log('[airtable] fetching CSV', url.toString());
-  const res = await fetch(url.toString(), { cache: 'no-store' });
-  console.log('[airtable] status', res.status);
-  if (!res.ok) throw new Error('Airtable CSV not reachable');
-
-  const csv = await res.text();
-  console.log('[airtable] first200', csv.slice(0,200));
-
-  const rows = parseCSV(csv);
-  console.log('[airtable] rows', rows.length);
-
-  // Map Airtable columns to the app’s record shape
-  const records = rows.map(r => {
-    // Safe JSON parses
-    const parseJson = (s, fallback) => {
-      try { return s ? JSON.parse(s) : fallback; } catch { return fallback; }
-    };
-    return {
-      template_id: r.template_id,
-      TYPE: r.TYPE,
-      sku_pattern: r.sku_pattern,
-      name: r.name,
-      SKU: r.SKU,
-      hero: r.hero || undefined,
-      units_per_sheet: Number(r.units_per_sheet || 12),
-      print_spec_json: parseJson(r.print_spec_json, undefined),
-      imposition_json: parseJson(r.imposition_json, undefined),
-      output_pattern: r.output_pattern || undefined,
-      // fields_json column contains the inputs; parse into fields[]
-      fields: parseJson(r.fields_json, [])
-    };
-  });
-
-  const skus  = records.map(x => x.SKU);
-  const pairs = records.map(x => `${x.TYPE}/${x.sku_pattern}`);
-  console.log('[airtable] mapped', records.length, '| SKUs =', skus, '| pairs =', pairs);
-
-  return { records };
+  const url = localJsonUrl();
+  console.log('[data] fetching', url);
+  const res = await fetch(url, { cache: 'no-store' });
+  console.log('[data] status', res.status);
+  const raw = await res.text();
+  console.log('[data] first300', raw.slice(0,300));
+  if (!res.ok) throw new Error('templates.json not found');
+  const txt = sanitizeJson(raw);
+  const json = JSON.parse(txt);
+  const skus  = (json.records||[]).map(r => r.SKU || r.sku);
+  const pairs = (json.records||[]).map(r => `${r.TYPE}/${r.sku_pattern}`);
+  console.log('[data] records', json.records?.length || 0, '| SKUs =', skus, '| pairs =', pairs);
+  return json;
 }
-
 
 /* ===== Views ===== */
 async function renderHome(){
