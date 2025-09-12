@@ -1,32 +1,86 @@
-{
-  "records": [
-    {
-      "template_id": "tpl-co-card-photo-12",
-      "TYPE": "beer-mat",
-      "sku_pattern": "photo-beer-mat-12",
-      "name": "Photo Beer Mat (12 pack)",
-      "SKU": "CO-CARD-PHOTO-12",
-      "fields": [
-        {
-          "key": "photo",
-          "type": "image",
-          "label": "Upload your photo",
-          "required": true,
-          "constraints": {
-            "minPx": [1000, 1000],
-            "aspect": "square",
-            "formats": ["jpg", "jpeg", "png"],
-            "maxMB": 10
-          }
-        },
-        {
-          "key": "text",
-          "type": "text",
-          "label": "Add optional text",
-          "required": false,
-          "maxLength": 30
-        }
-      ]
+// /api/templates.js
+export default async function handler(req, res) {
+  const q = req.query || {};
+  const legacy = (q.format || q.f) === "legacy"; // we’ll use legacy by default below anyway
+  const slugifyId = q.slug === "1" || q.slug === "true";
+  const kebabType = q.type === "kebab"; // kebab-case TYPE
+  const trimOnly = q.type === "raw";    // leave TYPE as-is
+
+  res.setHeader("access-control-allow-origin", process.env.ALLOWED_ORIGIN || "*");
+  res.setHeader("access-control-allow-methods", "GET, OPTIONS");
+  res.setHeader("access-control-allow-headers", "content-type");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+
+  const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME = "Templates" } = process.env;
+  if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID) {
+    return res.status(500).json({ error: "Missing env variables" });
+  }
+
+  const base = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE_ID)}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
+  const params = new URLSearchParams({ filterByFormula: "AND({active}=TRUE())", pageSize: "100" });
+  const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
+
+  const clean = (s) => (typeof s === "string" ? s.trim() : s);
+  const toKebab = (s) =>
+    clean(s)?.toString().toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  const bestId = (f) => {
+    // priority: explicit template_id -> SKU -> sku_pattern -> name
+    return clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+  };
+
+  const mapToLegacyExact = (rec) => {
+    const f = rec.fields || {};
+    // fields_json may already be JSON (object) or a string; we want an array/object here (not string)
+    let fieldsArr;
+    try {
+      if (Array.isArray(f.fields_json)) fieldsArr = f.fields_json;
+      else if (typeof f.fields_json === "string") fieldsArr = JSON.parse(f.fields_json);
+    } catch (_) { /* ignore bad json */ }
+
+    // Build template_id & TYPE the way you want
+    let id = bestId(f);
+    if (slugifyId && id) {
+      const slug = toKebab(id);
+      id = slug.startsWith("tpl-") ? slug : `tpl-${slug}`;
     }
-  ]
+    let typeOut = clean(f.TYPE ?? null);
+    if (kebabType && typeOut) typeOut = toKebab(typeOut);
+
+    return {
+      template_id: id,
+      TYPE: trimOnly ? clean(f.TYPE ?? null) : typeOut ?? null,
+      sku_pattern: clean(f.sku_pattern) ?? null,
+      name: clean(f.name) ?? null,
+      SKU: clean(f.SKU) ?? null,
+      fields: fieldsArr || undefined
+      // note: legacy sample doesn’t include hero/units_per_sheet/print_spec/imposition/output_pattern
+    };
+  };
+
+  async function fetchAll() {
+    let url = `${base}?${params.toString()}`;
+    const out = [];
+    while (url) {
+      const r = await fetch(url, { headers });
+      if (!r.ok) throw new Error(`Airtable ${r.status}`);
+      const body = await r.json();
+      (body.records || []).forEach((rec) => out.push(mapToLegacyExact(rec)));
+      url = body.offset ? `${base}?${params.toString()}&offset=${body.offset}` : "";
+    }
+    return out;
+  }
+
+  try {
+    const records = await fetchAll();
+    res.setHeader("cache-control", "s-maxage=300, stale-while-revalidate=60");
+    // default to legacy-compatible payload
+    return res.status(200).json({ records });
+  } catch (e) {
+    return res.status(502).json({ error: e.message || "Upstream error" });
+  }
 }
