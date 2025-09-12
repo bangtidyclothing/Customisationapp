@@ -1,9 +1,16 @@
 // /api/templates.js
+// Returns { records: [...] } in your legacy shape + parsed `layout`
+// Query params:
+//   ?slug=1            -> template_id becomes kebab-case and prefixed with "tpl-"
+//   ?type=kebab        -> TYPE becomes kebab-case (else left as-is)
+// CORS is restricted by ALLOWED_ORIGIN env (set to https://bangtidyclothing.github.io)
+
 export default async function handler(req, res) {
   const q = req.query || {};
   const slugifyId = q.slug === "1" || q.slug === "true";
-  const kebabType = q.type === "kebab"; // kebab-case TYPE
+  const kebabType = q.type === "kebab";
 
+  // CORS
   res.setHeader("access-control-allow-origin", process.env.ALLOWED_ORIGIN || "*");
   res.setHeader("access-control-allow-methods", "GET, OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type");
@@ -11,30 +18,47 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
-  const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME = "Templates" } = process.env;
+  const {
+    AIRTABLE_API_KEY,
+    AIRTABLE_BASE_ID,
+    AIRTABLE_TABLE_NAME = "Templates",
+  } = process.env;
+
   if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID) {
     return res.status(500).json({ error: "Missing env variables" });
   }
 
   const base = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE_ID)}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
-  const params = new URLSearchParams({ filterByFormula: "AND({active}=TRUE())", pageSize: "100" });
+  const params = new URLSearchParams({
+    filterByFormula: "AND({active}=TRUE())",
+    pageSize: "100",
+  });
   const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
 
   const clean = (s) => (typeof s === "string" ? s.trim() : s);
   const toKebab = (s) =>
     clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  const bestId = (f) => clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+  const bestId = (f) =>
+    clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
 
+  // ---- mapper (legacy shape + parsed layout) ----
   const mapLegacy = (rec) => {
     const f = rec.fields || {};
 
-    // Parse fields_json into an array/object if present
+    // fields_json -> object/array
     let fields;
     try {
       if (Array.isArray(f.fields_json)) fields = f.fields_json;
       else if (typeof f.fields_json === "string") fields = JSON.parse(f.fields_json);
-    } catch (_) { /* ignore bad JSON */ }
+    } catch (_) {}
+
+    // Layout_spec -> object
+    let layout;
+    try {
+      if (f.Layout_spec && typeof f.Layout_spec === "string") layout = JSON.parse(f.Layout_spec);
+      else if (f.Layout_spec && typeof f.Layout_spec === "object") layout = f.Layout_spec;
+    } catch (_) {}
 
     // template_id
     let id = bestId(f);
@@ -47,15 +71,15 @@ export default async function handler(req, res) {
     let typeOut = clean(f.TYPE ?? null);
     if (kebabType && typeOut) typeOut = toKebab(typeOut);
 
-    // Build EXACT legacy-shaped object (no extras)
     const out = {
       template_id: id,
       TYPE: typeOut ?? null,
       sku_pattern: clean(f.sku_pattern) ?? null,
       name: clean(f.name) ?? null,
-      SKU: clean(f.SKU) ?? null
+      SKU: clean(f.SKU) ?? null,
     };
-    if (fields !== undefined) out.fields = fields; // include only if present
+    if (fields !== undefined) out.fields = fields;
+    if (layout !== undefined) out.layout = layout; // << add parsed layout
     return out;
   };
 
