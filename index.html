@@ -5,26 +5,44 @@
   <title>Customisation App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
+    :root { --bd:#ddd; --muted:#666; --bg:#fafafa; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
     h1 { margin: 0 0 12px; }
-    #templates ul { padding-left: 18px; }
-    button { padding: 8px 12px; border: 1px solid #ccc; background: #fff; border-radius: 8px; cursor: pointer; }
-    input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; }
-    pre { background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 10px; }
-    .card { margin-top: 1rem; padding: 12px; border: 1px solid #ddd; border-radius: 12px; }
+    .card { margin-top: 1rem; padding: 12px; border: 1px solid var(--bd); border-radius: 12px; background: #fff; }
+    button { padding: 8px 12px; border: 1px solid var(--bd); background: #fff; border-radius: 8px; cursor: pointer; }
+    input { padding: 8px 10px; border: 1px solid var(--bd); border-radius: 8px; min-width: 180px; }
+    pre { background: var(--bg); border: 1px solid #eee; border-radius: 8px; padding: 10px; }
+    #templates ul { padding-left: 18px; margin-top: 6px; }
+    #templates-status { margin-top:6px; color: var(--muted); }
   </style>
 </head>
 <body>
   <h1>Customisation App</h1>
 
+  <!-- Templates list (simple) -->
   <div id="templates" class="card">
     <strong>Templates</strong>
-    <div id="templates-status" style="margin-top:6px;color:#666;">Loading…</div>
-    <ul id="templates-list" style="margin-top:6px;"></ul>
+    <div id="templates-status">Loading…</div>
+    <ul id="templates-list"></ul>
+  </div>
+
+  <!-- Simulator (lets you trigger the flow without URL params) -->
+  <div class="card" id="simPanel">
+    <strong>Simulate Jotform</strong>
+    <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+      <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-photo-12)">
+      <input id="simName" placeholder="name">
+      <input id="simOrder" placeholder="orderId">
+      <input id="simPhoto" placeholder="photo URL (optional)">
+      <button id="simBtn">Start</button>
+    </div>
+    <div style="margin-top:8px; color: var(--muted); font-size: 12px;">
+      Tip: copy a template_id from the list above, enter name/orderId, and click Start.
+    </div>
   </div>
 
   <script>
-  // ---- Params reader (works with query or hash) ----
+  // ---- Params reader (supports query OR hash) ----
   function getParams() {
     const qs = new URLSearchParams(location.search);
     if (qs.toString()) return qs;
@@ -33,7 +51,7 @@
   }
   function qp(k){ return getParams().get(k) || ""; }
 
-  // ---- API loader ----
+  // ---- API loader (Airtable → Vercel proxy) ----
   async function loadTemplates() {
     const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
     const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
@@ -45,22 +63,23 @@
     return Array.isArray(data.records) ? data.records : [];
   }
 
-  // ---- Boot from Jotform redirect ----
+  // ---- Safe URL helper ----
   function safeUrl(u){
     try { const url = new URL(u); return url.href; } catch { return ""; }
   }
 
+  // ---- Boot from URL params (Jotform redirect) ----
   async function bootFromJotform() {
     const templateId = qp("template_id");
     const orderId    = qp("orderId");
     const name       = qp("name");
     const photo      = safeUrl(qp("photo"));
 
-    if (!templateId) return;
+    if (!templateId) return false; // nothing to do
 
     const templates = await loadTemplates();
     const tpl = templates.find(t => (t.template_id || "").toLowerCase() === templateId.toLowerCase());
-    if (!tpl) return;
+    if (!tpl) return false;
 
     const prefill = {};
     if (Array.isArray(tpl.fields)) {
@@ -69,11 +88,11 @@
         if (f.key === "photo" && photo) prefill.photo = photo;
       }
     }
-
     startWorkflow(tpl, { orderId, prefill });
+    return true;
   }
 
-  // ---- Example workflow stub ----
+  // ---- Your workflow hook (replace with real UI) ----
   function startWorkflow(template, ctx) {
     const box = document.createElement("div");
     box.className = "card";
@@ -84,73 +103,56 @@
       <pre>${JSON.stringify(ctx.prefill, null, 2)}</pre>
     `;
     document.body.appendChild(box);
+    // TODO: plug in your designer/renderer here instead of this stub
   }
 
-  // ---- Render basic list & trigger auto-start if params exist ----
+  // ---- Init: render list, wire simulator, then try auto-start ----
   (async function init() {
     const listEl = document.getElementById("templates-list");
     const statusEl = document.getElementById("templates-status");
-
     const records = await loadTemplates();
 
     if (!records.length) {
       statusEl.textContent = "No templates found";
-      return;
+    } else {
+      statusEl.remove();
+      const frag = document.createDocumentFragment();
+      records.forEach(t => {
+        const li = document.createElement("li");
+        li.textContent = `${t.template_id} — ${t.name ?? ""}`;
+        frag.appendChild(li);
+      });
+      listEl.appendChild(frag);
     }
-    statusEl.remove();
 
-    const frag = document.createDocumentFragment();
-    records.forEach(t => {
-      const li = document.createElement("li");
-      li.textContent = `${t.template_id} — ${t.name ?? ""}`;
-      frag.appendChild(li);
+    // Simulator wiring
+    const $ = (id) => document.getElementById(id);
+    $("simBtn").addEventListener("click", async () => {
+      const templateId = $("simTpl").value.trim();
+      const name = $("simName").value.trim();
+      const orderId = $("simOrder").value.trim();
+      const photo = $("simPhoto").value.trim();
+
+      if (!templateId) { alert("Enter a template_id"); return; }
+
+      // reuse already-fetched list if available; otherwise reload
+      const tplList = records.length ? records : await loadTemplates();
+      const tpl = tplList.find(t => (t.template_id || "").toLowerCase() === templateId.toLowerCase());
+      if (!tpl) { alert("Template not found. Copy one from the list above."); return; }
+
+      const prefill = {};
+      if (Array.isArray(tpl.fields)) {
+        for (const f of tpl.fields) {
+          if (f.key === "text") prefill.text = name || "";
+          if (f.key === "photo" && photo) prefill.photo = safeUrl(photo) || "";
+        }
+      }
+      startWorkflow(tpl, { orderId, prefill });
     });
-    listEl.appendChild(frag);
 
-    // trigger workflow if coming from Jotform
-    bootFromJotform();
+    // Try to auto-boot from URL/hash params
+    await bootFromJotform();
   })();
   </script>
-  <!-- Simulate Jotform redirect (no URL needed) -->
-<div class="card" style="margin-top:12px;">
-  <strong>Simulate Jotform</strong>
-  <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-    <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-photo-12)" style="flex:1; min-width:260px; padding:8px; border:1px solid #ccc; border-radius:8px;">
-    <input id="simName" placeholder="name" style="padding:8px; border:1px solid #ccc; border-radius:8px;">
-    <input id="simOrder" placeholder="orderId" style="padding:8px; border:1px solid #ccc; border-radius:8px;">
-    <input id="simPhoto" placeholder="photo URL (optional)" style="flex:1; min-width:260px; padding:8px; border:1px solid #ccc; border-radius:8px;">
-    <button id="simBtn" style="padding:8px 12px; border:1px solid #ccc; background:#fff; border-radius:8px;">Start</button>
-  </div>
-</div>
-
-<script>
-(function () {
-  const $ = (id) => document.getElementById(id);
-  const btn = $('simBtn');
-
-  btn.addEventListener('click', async () => {
-    const templateId = $('simTpl').value.trim();
-    const name = $('simName').value.trim();
-    const orderId = $('simOrder').value.trim();
-    const photo = $('simPhoto').value.trim();
-
-    if (!templateId) { alert('Enter a template_id'); return; }
-
-    const templates = await loadTemplates();
-    const tpl = templates.find(t => (t.template_id || '').toLowerCase() === templateId.toLowerCase());
-    if (!tpl) { alert('Template not found. Copy one from the list above.'); return; }
-
-    const prefill = {};
-    if (Array.isArray(tpl.fields)) {
-      for (const f of tpl.fields) {
-        if (f.key === 'text') prefill.text = name || '';
-        if (f.key === 'photo' && photo) prefill.photo = photo;
-      }
-    }
-    startWorkflow(tpl, { orderId, prefill });
-  });
-})();
-</script>
-
 </body>
 </html>
