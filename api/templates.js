@@ -1,9 +1,6 @@
 // /api/templates.js
 // Returns { records: [...] } in legacy shape + parsed `layout` + `base_image`
-// Query params:
-//   ?slug=1            -> template_id kebab + "tpl-" prefix
-//   ?type=kebab        -> TYPE kebab-case
-// CORS origin via ALLOWED_ORIGIN (e.g. https://bangtidyclothing.github.io)
+// Also surfaces requires_photo / requires_text from Airtable.
 
 export default async function handler(req, res) {
   const q = req.query || {};
@@ -35,9 +32,9 @@ export default async function handler(req, res) {
   const toKebab = (s) =>
     clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  const bestId = (f) => clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+  const bestId = (f) =>
+    clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
 
-  // Extract a URL from string or Airtable "attachment" array
   const firstUrl = (v) => {
     if (!v) return null;
     if (typeof v === "string") return clean(v) || null;
@@ -48,26 +45,27 @@ export default async function handler(req, res) {
   const mapLegacy = (rec) => {
     const f = rec.fields || {};
 
-    // fields_json -> object/array
+    // fields_json
     let fields;
     try {
       if (Array.isArray(f.fields_json)) fields = f.fields_json;
       else if (typeof f.fields_json === "string") fields = JSON.parse(f.fields_json);
     } catch (_) {}
 
-    // Layout_spec -> object
+    // Layout_spec
     let layout;
     try {
       if (f.Layout_spec && typeof f.Layout_spec === "string") layout = JSON.parse(f.Layout_spec);
       else if (f.Layout_spec && typeof f.Layout_spec === "object") layout = f.Layout_spec;
     } catch (_) {}
 
-    // base image: support both `base_image` and `Base_image`, fallback to `hero`
+    // Base image from base_image / Base_image / hero
     const base_image =
-      firstUrl(f.base_image) ||
-      firstUrl(f.Base_image) ||
-      firstUrl(f.hero) ||
-      null;
+      firstUrl(f.base_image) || firstUrl(f.Base_image) || firstUrl(f.hero) || null;
+
+    // requires flags (booleans)
+    const requires_photo = f.requires_photo === true || f.requires_photo === "true";
+    const requires_text  = f.requires_text  === true || f.requires_text  === "true";
 
     // template_id
     let id = bestId(f);
@@ -86,10 +84,13 @@ export default async function handler(req, res) {
       sku_pattern: clean(f.sku_pattern) ?? null,
       name: clean(f.name) ?? null,
       SKU: clean(f.SKU) ?? null,
+      requires_photo,
+      requires_text,
     };
     if (fields !== undefined) out.fields = fields;
     if (layout !== undefined) out.layout = layout;
-    if (base_image !== null) out.base_image = base_image; // <<< ensures lower/upper-case field names work
+    if (base_image !== null) out.base_image = base_image;
+
     return out;
   };
 
