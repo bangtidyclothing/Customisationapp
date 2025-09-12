@@ -107,17 +107,28 @@
     return records;
   }
 
-  // ---- Generic builder ----
+  // ---- Generic builder (PATCHED: only fields used by layout) ----
   function buildForm(template, prefill) {
     const form = document.getElementById('c-form');
     form.innerHTML = "";
-    (template.fields || []).forEach(field => {
+
+    const layoutKeys = new Set(
+      (template.layout?.elements || []).map(e => e.key).filter(Boolean)
+    );
+
+    const fields = Array.isArray(template.fields)
+      ? (layoutKeys.size ? template.fields.filter(f => layoutKeys.has(f.key)) : template.fields)
+      : [];
+
+    fields.forEach(field => {
       const wrap = document.createElement('div');
       if (field.type === 'text') {
         const id = `f_${field.key}`;
         wrap.innerHTML = `
           <label for="${id}">${field.label || field.key}</label>
-          <input id="${id}" name="${field.key}" type="text" ${field.maxLength ? `maxlength="${field.maxLength}"`:''} value="${(prefill?.[field.key]||'').replace(/"/g,'&quot;')}">
+          <input id="${id}" name="${field.key}" type="text"
+                 ${field.maxLength ? `maxlength="${field.maxLength}"`:''}
+                 value="${(prefill?.[field.key]||'').replace(/"/g,'&quot;')}">
           ${field.maxLength ? `<small>Max ${field.maxLength} characters</small>` : ''}
         `;
       } else if (field.type === 'image') {
@@ -125,7 +136,8 @@
         wrap.innerHTML = `
           <label>${field.label || field.key}</label>
           <input id="${id}_url" type="url" placeholder="Paste image URL" value="${prefill?.[field.key]||''}">
-          <input id="${id}_file" type="file" accept="${(field.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
+          <input id="${id}_file" type="file"
+                 accept="${(field.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
           <img id="${id}_prev" class="preview" style="display:none;">
         `;
       } else {
@@ -135,21 +147,31 @@
     });
   }
 
+  // ---- Collect form (PATCHED: same filtering as builder) ----
   async function collectForm(template) {
     const out = {};
     const errs = [];
-    for (const field of (template.fields||[])) {
+
+    const layoutKeys = new Set(
+      (template.layout?.elements || []).map(e => e.key).filter(Boolean)
+    );
+
+    const fields = Array.isArray(template.fields)
+      ? (layoutKeys.size ? template.fields.filter(f => layoutKeys.has(f.key)) : template.fields)
+      : [];
+
+    for (const field of fields) {
       if (field.type === 'text') {
         const el = document.getElementById(`f_${field.key}`);
-        const val = (el?.value||"").trim();
+        const val = (el?.value || "").trim();
         if (field.required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
       if (field.type === 'image') {
         const urlEl = document.getElementById(`f_${field.key}_url`);
         const fileEl = document.getElementById(`f_${field.key}_file`);
-        let val = (urlEl?.value||"").trim();
-        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // stub
+        let val = (urlEl?.value || "").trim();
+        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder until upload
         if (field.required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
