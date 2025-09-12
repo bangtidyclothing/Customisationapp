@@ -52,7 +52,7 @@
     <div id="c-head"><strong id="c-title"></strong></div>
     <form id="c-form" style="margin-top:8px;"></form>
 
-    <!-- Preview block (no download) -->
+    <!-- Preview (no download) -->
     <div id="c-preview" style="margin-top:10px;">
       <div style="margin-bottom:6px;"><strong>Preview</strong></div>
       <div id="svgMount" style="border:1px solid #ddd; border-radius:8px; overflow:hidden;"></div>
@@ -80,10 +80,7 @@
   async function loadTemplates() {
     const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
     const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
-    if (!res.ok) {
-      console.error("Template fetch failed", res.status);
-      return [];
-    }
+    if (!res.ok) { console.error("Template fetch failed", res.status); return []; }
     const data = await res.json();
     return Array.isArray(data.records) ? data.records : [];
   }
@@ -97,10 +94,7 @@
     const statusEl = document.getElementById("templates-status");
     const records = await loadTemplates();
 
-    if (!records.length) {
-      statusEl.textContent = "No templates found";
-      return records;
-    }
+    if (!records.length) { statusEl.textContent = "No templates found"; return records; }
     statusEl.remove();
 
     const frag = document.createDocumentFragment();
@@ -155,7 +149,7 @@
         const urlEl = document.getElementById(`f_${field.key}_url`);
         const fileEl = document.getElementById(`f_${field.key}_file`);
         let val = (urlEl?.value||"").trim();
-        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // stub (upload later)
+        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // stub
         if (field.required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
@@ -163,12 +157,11 @@
     return { out, errs };
   }
 
-  // ---- Helpers to align form inputs with layout keys ----
+  // ---- Map form inputs to layout keys (handles key mismatches) ----
   function normalizeInputsForLayout(layout, inputs, fields){
     const out = { ...inputs };
     const textKeys  = (fields || []).filter(f => f.type === 'text').map(f => f.key);
     const imageKeys = (fields || []).filter(f => f.type === 'image').map(f => f.key);
-
     (layout?.elements || []).forEach(el => {
       if (el.type === 'text' && !out[el.key]) {
         if (textKeys.length === 1) out[el.key] = inputs[textKeys[0]] || '';
@@ -180,7 +173,7 @@
     return out;
   }
 
-  // ---- SVG composer helpers (with base image) ----
+  // ---- SVG composer (with base image + text fill support) ----
   function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
     const rImg = imgW / imgH, rBox = boxW / boxH;
     let w,h; if (mode==='cover'){ if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; } }
@@ -207,7 +200,7 @@
       `<rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>`
     ];
 
-    // base image full-canvas (use 'contain' so it isn't cropped)
+    // base image
     if (baseUrl) {
       const s = await imgSize(baseUrl);
       if (s) {
@@ -218,7 +211,7 @@
       }
     }
 
-    // overlay elements
+    // elements
     for (const el of (layout.elements||[])){
       if (el.type==='image'){
         const url = inputs[el.key]; if (!url) continue;
@@ -234,9 +227,10 @@
         const val = (inputs[el.key]||'')+''; if (!val) continue;
         const x=el.x||0, y=el.y||0, w=el.w||vbW, align=el.align||'left';
         const sizePt = el.sizePt||14, font = el.font||'Arial, sans-serif';
+        const fill = el.fill || '#000';
         const anchor = align==='center'?'middle':(align==='right'?'end':'start');
         const tx = align==='center'? x+w/2 : (align==='right'? x+w : x);
-        parts.push(`<text x="${tx}" y="${y}" font-family="${font}" font-size="${sizePt}pt" text-anchor="${anchor}" dominant-baseline="hanging">`+
+        parts.push(`<text x="${tx}" y="${y}" font-family="${font}" font-size="${sizePt}pt" fill="${fill}" text-anchor="${anchor}" dominant-baseline="hanging">`+
                    `${val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</text>`);
       }
     }
@@ -249,12 +243,8 @@
     const mount = document.getElementById('svgMount');
     if (!template?.layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; return; }
 
-    // prefer layout.baseImage, else API base_image
     const baseUrl = (template.layout && template.layout.baseImage) || template.base_image || null;
-
-    // align inputs with layout keys (handles name/text mismatch)
     const aligned = normalizeInputsForLayout(template.layout, inputs, template.fields || []);
-
     const svg = await composeSVG(template.layout, aligned, baseUrl);
     mount.innerHTML = svg;
   }
@@ -263,11 +253,13 @@
   function startWorkflow(template, ctx) {
     document.getElementById('templates')?.classList.add('hidden');
     document.getElementById('simPanel')?.classList.add('hidden');
+
     const wrap = document.getElementById('customiser');
     wrap.classList.remove('hidden');
     document.getElementById('c-title').textContent = `${template.template_id} — ${template.name||''}`;
     document.getElementById('c-errors').textContent = '';
     document.getElementById('c-done').textContent = '';
+
     buildForm(template, ctx.prefill);
 
     // initial preview
@@ -326,14 +318,17 @@
   // ---- Init ----
   (async function init() {
     const records = await renderList();
+
     // Simulator
     document.getElementById("simBtn").addEventListener("click", () => {
       const templateId = document.getElementById("simTpl").value.trim();
       const name = document.getElementById("simName").value.trim();
       const orderId = document.getElementById("simOrder").value.trim();
       const photo = document.getElementById("simPhoto").value.trim();
+
       const tpl = records.find(t => (t.template_id||"").toLowerCase() === templateId.toLowerCase());
       if (!tpl) { alert("Template not found."); return; }
+
       const prefill = {};
       if (Array.isArray(tpl.fields)) {
         for (const f of tpl.fields) {
@@ -343,6 +338,7 @@
       }
       startWorkflow(tpl, { orderId, prefill });
     });
+
     // Auto-start if params present
     await bootFromJotform(records);
   })();
