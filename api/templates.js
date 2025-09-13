@@ -9,13 +9,10 @@ export default async function handler(req, res) {
 
   // --- Env ---
   const API_KEY   = process.env.AIRTABLE_API_KEY;
-  const BASE_ID   = process.env.AIRTABLE_BASE_ID || process.env.AIRTABLE_BASE;   // support either name
+  const BASE_ID   = process.env.AIRTABLE_BASE_ID || process.env.AIRTABLE_BASE;
   const TABLE     = process.env.AIRTABLE_TABLE || 'templates';
   const API_ROOT  = process.env.AIRTABLE_API || 'https://api.airtable.com/v0';
-
-  if (!API_KEY || !BASE_ID) {
-    return res.status(500).json({ error: 'Airtable env not configured' });
-  }
+  if (!API_KEY || !BASE_ID) return res.status(500).json({ error: 'Airtable env not configured' });
 
   // --- Query params ---
   const qp = req.query || {};
@@ -33,7 +30,7 @@ export default async function handler(req, res) {
 
   const safeParse = (v, fallback = null) => {
     if (v == null) return fallback;
-    if (typeof v === 'object') return v; // already parsed
+    if (typeof v === 'object') return v;
     try { return JSON.parse(v); } catch { return fallback; }
   };
 
@@ -45,32 +42,24 @@ export default async function handler(req, res) {
 
   const safeFields = (v) => {
     const arr = safeArray(v);
-    // minimal validation: ensure each item has a key/type
     return arr.filter(x => x && typeof x === 'object' && (x.key || x.id || x.name));
   };
 
   const safeLayout = (v) => {
     const o = safeParse(v, null);
     if (!o || typeof o !== 'object') return null;
-    // normalise a couple of common shapes
-    if (Array.isArray(o.elements)) {
-      return o;
-    }
-    // sometimes layout comes as { layout: { elements: [...] } }
-    if (o.layout && Array.isArray(o.layout.elements)) {
-      return o.layout;
-    }
+    if (Array.isArray(o.elements)) return o;
+    if (o.layout && Array.isArray(o.layout.elements)) return o.layout;
     return o;
   };
 
-  // --- Fields to fetch from Airtable ---
+  // --- Fields to fetch (NOTE the capital L in Layout_spec) ---
   const FIELDS = [
     'template_id', 'name', 'TYPE',
-    'fields_json', 'layout_spec',
+    'fields_json', 'Layout_spec',
     'requires_photo', 'requires_text',
     'optional', 'optional_photo', 'optional_text',
     'base_image',
-    // NEW:
     'type_title', 'type_instructions_md', 'type_requirements_json'
   ];
 
@@ -81,7 +70,6 @@ export default async function handler(req, res) {
   for (const f of FIELDS) search.push('fields[]=' + encodeURIComponent(f));
 
   if (filterTemplate) {
-    // filterByFormula: {template_id} = '...'
     const quoted = filterTemplate.replace(/'/g, "\\'");
     const formula = `({template_id} = '${quoted}')`;
     search.push('filterByFormula=' + encodeURIComponent(formula));
@@ -92,9 +80,7 @@ export default async function handler(req, res) {
   // --- Fetch Airtable ---
   let data;
   try {
-    const atRes = await fetch(url, {
-      headers: { Authorization: `Bearer ${API_KEY}` }
-    });
+    const atRes = await fetch(url, { headers: { Authorization: `Bearer ${API_KEY}` } });
     if (!atRes.ok) {
       const txt = await atRes.text().catch(() => '');
       return res.status(atRes.status).json({ error: 'Airtable error', details: txt });
@@ -109,38 +95,30 @@ export default async function handler(req, res) {
   // --- Map records to frontend shape ---
   const records = atRecords.map(r => {
     const f = r.fields || {};
-    const fields = safeFields(f.fields_json);
-    const layout = safeLayout(f.layout_spec);
-
-    const meta = {
-      title: f.type_title || null,
-      instructions_md: f.type_instructions_md || '',
-      requirements: safeArray(f.type_requirements_json)
-    };
 
     const originalType = f.TYPE || '';
     const kebabType = toKebab(originalType);
 
-    const out = {
+    return {
       template_id: f.template_id || '',
       name: f.name || '',
-      TYPE: originalType,                 // keep original (as requested)
-      fields,
-      layout,
-      requires_photo: !!f.requires_photo || f.requires_photo === true,
-      requires_text:  !!f.requires_text  || f.requires_text  === true,
-      optional:        !!f.optional,
-      optional_photo:  !!f.optional_photo,
-      optional_text:   !!f.optional_text,
+      TYPE: originalType,
+      fields: safeFields(f.fields_json),          // expects JSON array in fields_json
+      layout: safeLayout(f.Layout_spec),          // NOTE: capital L
+      requires_photo: !!(f.requires_photo === true || f.requires_photo === 'true' || f.requires_photo === 1),
+      requires_text:  !!(f.requires_text  === true || f.requires_text  === 'true' || f.requires_text  === 1),
+      optional:        !!(f.optional === true || f.optional === 'true' || f.optional === 1),
+      optional_photo:  !!(f.optional_photo === true || f.optional_photo === 'true' || f.optional_photo === 1),
+      optional_text:   !!(f.optional_text  === true || f.optional_text  === 'true' || f.optional_text  === 1),
       base_image: f.base_image || null,
-      typeMeta: meta
+      typeMeta: {
+        title: f.type_title || null,
+        instructions_md: f.type_instructions_md || '',
+        requirements: safeArray(f.type_requirements_json)
+      },
+      ...(wantKebabType ? { type: kebabType } : {}),
+      ...(wantSlugObj   ? { slug: { type: kebabType } } : {})
     };
-
-    // Optional helpers based on query flags
-    if (wantKebabType) out.type = kebabType;      // e.g. "beer-mat-photo"
-    if (wantSlugObj)  out.slug = { type: kebabType };
-
-    return out;
   });
 
   return res.status(200).json({ records });
