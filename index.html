@@ -19,6 +19,7 @@
     .hidden { display: none !important; }
     .error { color: #b00020; }
     .success { color: #0f7b0f; }
+    .monospace { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -74,44 +75,46 @@
   }
   function qp(k){ return getParams().get(k) || ""; }
 
-  // ---- API loader ----
+  // ---- API base (with override via ?api= for debugging) ----
+  const API_BASE = (() => {
+    const override = qp('api');
+    return override || "https://customisationapp-new.vercel.app/api/templates";
+  })();
+
+  // ---- API loader (robust, with timeout + human-readable errors) ----
   async function loadTemplates() {
-    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
-    const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
-    if (!res.ok) { console.error("Template fetch failed", res.status); return []; }
-    const data = await res.json();
-    return (Array.isArray(data.records) ? data.records : [])
-      .map(normalizeRecord)
-      .filter(r => r.template_id); // drop blanks
+    const url = new URL(API_BASE);
+    url.searchParams.set('slug', '1');   // include slug fields
+    url.searchParams.set('type', 'kebab'); // include kebab-case .type
+
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 12000); // 12s timeout
+
+    try {
+      const res = await fetch(url.href, { credentials: "omit", cache: "no-store", signal: controller.signal });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; }
+      catch (e) {
+        throw new Error(`API returned non-JSON. First 200 chars:\n${text.slice(0,200)}`);
+      }
+      if (!res.ok) {
+        const msg = data?.error || res.statusText || 'HTTP error';
+        throw new Error(`HTTP ${res.status}: ${msg}`);
+      }
+      if (!Array.isArray(data.records)) {
+        throw new Error(`No "records" in response.`);
+      }
+      return data.records.map(normalizeRecord).filter(r => r.template_id);
+    } catch (err) {
+      err.apiUrl = url.href;
+      throw err;
+    } finally {
+      clearTimeout(t);
+    }
   }
 
   // ---- Safe URL ----
-    // ---- Local image preview state ----
-const localImages = new Map(); // key -> { objectUrl }
-function clearLocalImages(){
-  for (const v of localImages.values()) { try { URL.revokeObjectURL(v.objectUrl); } catch{} }
-  localImages.clear();
-}
-
-// Build the current inputs map, preferring local object URLs for image fields
-function currentInputsForPreview(template){
-  const out = { template_id: template?.template_id || '' };
-  const visible = getVisibleFields(template);
-  visible.forEach(f => {
-    if (f.type === 'text') {
-      out[f.key] = (document.getElementById(`f_${f.key}`)?.value || '').trim();
-    } else if (f.type === 'image') {
-      const local = localImages.get(f.key);
-      if (local?.objectUrl) {
-        out[f.key] = local.objectUrl;
-      } else {
-        out[f.key] = (document.getElementById(`f_${f.key}_url`)?.value || '').trim();
-      }
-    }
-  });
-  return out;
-}
-
   function safeUrl(u){ try { const url = new URL(u); return url.href; } catch { return ""; } }
 
   // ---- Normalisers ----
@@ -133,25 +136,35 @@ function currentInputsForPreview(template){
     return { ...t, template_id:id, name, TYPE, type:typeKebab, base_image: base || null };
   }
 
-  // ---- Render list ----
+  // ---- Render list (shows helpful error UI) ----
   async function renderList() {
     const listEl = document.getElementById("templates-list");
     const statusEl = document.getElementById("templates-status");
-    const records = await loadTemplates();
+    try {
+      const records = await loadTemplates();
+      if (!records.length) { statusEl.textContent = "No templates found"; return records; }
+      statusEl.remove();
 
-    if (!records.length) { statusEl.textContent = "No templates found"; return records; }
-    statusEl.remove();
-
-    const frag = document.createDocumentFragment();
-    records.forEach(t => {
-      const li = document.createElement("li");
-      const typeLabel = (t.type || toSlug(t.TYPE || '')).replace(/-/g,' ');
-      const typeTitle = typeLabel ? typeLabel.replace(/\b\w/g, c => c.toUpperCase()) : "";
-      li.textContent = `${t.template_id} — ${t.name ?? ""}${typeTitle ? " — TYPE: " + typeTitle : ""}`;
-      frag.appendChild(li);
-    });
-    listEl.appendChild(frag);
-    return records;
+      const frag = document.createDocumentFragment();
+      records.forEach(t => {
+        const li = document.createElement("li");
+        const typeLabel = (t.type || toSlug(t.TYPE || '')).replace(/-/g,' ');
+        const typeTitle = typeLabel ? typeLabel.replace(/\b\w/g, c => c.toUpperCase()) : "";
+        li.textContent = `${t.template_id} — ${t.name ?? ""}${typeTitle ? " — TYPE: " + typeTitle : ""}`;
+        frag.appendChild(li);
+      });
+      listEl.appendChild(frag);
+      return records;
+    } catch (err) {
+      console.error('Template fetch failed:', err);
+      const apiUrl = err.apiUrl || API_BASE;
+      statusEl.innerHTML = `
+        <div class="error">Error loading templates.</div>
+        <div class="monospace">${(err && err.message) ? err.message.replace(/</g,'&lt;') : 'Unknown error'}</div>
+        <div style="margin-top:6px;"><a href="${apiUrl}" target="_blank" rel="noopener">Open API response</a></div>
+      `;
+      return [];
+    }
   }
 
   // ---- Field filtering using table-level flags ----
@@ -392,88 +405,77 @@ function currentInputsForPreview(template){
     return true;
   }
 
+  // ---- Local image preview state (for future photo upload step) ----
+  const localImages = new Map();
+  function clearLocalImages(){
+    for (const v of localImages.values()) { try { URL.revokeObjectURL(v.objectUrl); } catch{} }
+    localImages.clear();
+  }
+  function currentInputsForPreview(template){
+    const out = { template_id: template?.template_id || '' };
+    const visible = getVisibleFields(template);
+    visible.forEach(f => {
+      if (f.type === 'text') {
+        out[f.key] = (document.getElementById(`f_${f.key}`)?.value || '').trim();
+      } else if (f.type === 'image') {
+        const local = localImages.get(f.key);
+        if (local?.objectUrl) {
+          out[f.key] = local.objectUrl;
+        } else {
+          out[f.key] = (document.getElementById(`f_${f.key}_url`)?.value || '').trim();
+        }
+      }
+    });
+    return out;
+  }
+
   // ---- Workflow ----
   function startWorkflow(template, ctx) {
-  // reset view + local file URLs
-  document.getElementById('templates')?.classList.add('hidden');
-  document.getElementById('simPanel')?.classList.add('hidden');
-  clearLocalImages();
-
-  const wrap = document.getElementById('customiser');
-  wrap.classList.remove('hidden');
-  document.getElementById('c-title').textContent = `${template.template_id} — ${template.name||''}`;
-  document.getElementById('c-errors').textContent = '';
-  document.getElementById('c-done').textContent = '';
-
-  buildForm(template, ctx.prefill);
-
-  // initial preview (uses any prefill)
-  renderPreview(template, { ...currentInputsForPreview(template) });
-
-  // live re-render for text/URL changes
-  const formEl = document.getElementById('c-form');
-  formEl.addEventListener('input', () => {
-    renderPreview(template, currentInputsForPreview(template));
-  });
-
-  // file → objectURL → preview (delegated listener)
-  formEl.addEventListener('change', (e) => {
-    const t = e.target;
-    if (!t || t.type !== 'file' || !t.id) return;
-    const m = t.id.match(/^f_(.+)_file$/);
-    if (!m) return;
-    const key = m[1];
-
-    // revoke previous
-    const prev = localImages.get(key);
-    if (prev?.objectUrl) { try { URL.revokeObjectURL(prev.objectUrl); } catch{} }
-
-    // set new (or clear)
-    const file = t.files && t.files[0];
-    if (file) {
-      const objectUrl = URL.createObjectURL(file);
-      localImages.set(key, { objectUrl });
-      // optionally hint in the URL box
-      const urlEl = document.getElementById(`f_${key}_url`);
-      if (urlEl) { urlEl.value = ''; urlEl.placeholder = file.name; }
-    } else {
-      localImages.delete(key);
-    }
-    renderPreview(template, currentInputsForPreview(template));
-  });
-
-  document.getElementById('c-submit').onclick = async () => {
-    const { out, errs } = await collectForm(template);
-    if (errs.length) { document.getElementById('c-errors').textContent = errs.join(' • '); return; }
-    document.getElementById('c-done').textContent = 'All good — ready to generate!';
-  };
-  document.getElementById('c-cancel').onclick = () => {
+    document.getElementById('templates')?.classList.add('hidden');
+    document.getElementById('simPanel')?.classList.add('hidden');
     clearLocalImages();
-    wrap.classList.add('hidden');
-    document.getElementById('templates')?.classList.remove('hidden');
-    document.getElementById('simPanel')?.classList.remove('hidden');
-  };
-}
 
+    const wrap = document.getElementById('customiser');
+    wrap.classList.remove('hidden');
+    document.getElementById('c-title').textContent = `${template.template_id} — ${template.name||''}`;
+    document.getElementById('c-errors').textContent = '';
+    document.getElementById('c-done').textContent = '';
+
+    buildForm(template, ctx.prefill);
 
     // initial preview
-    renderPreview(template, { ...ctx.prefill, template_id: template.template_id });
+    renderPreview(template, { ...currentInputsForPreview(template) });
 
-    // re-render on input changes
-    document.getElementById('c-form').addEventListener('input', () => {
-      const current = {};
-      const visible = getVisibleFields(template);
-      visible.forEach(f => {
-        if (f.type === 'text') {
-          const el = document.getElementById(`f_${f.key}`);
-          current[f.key] = (el?.value || '').trim();
-        }
-        if (f.type === 'image') {
-          const urlEl = document.getElementById(`f_${f.key}_url`);
-          current[f.key] = (urlEl?.value || '').trim();
-        }
-      });
-      renderPreview(template, { ...current, template_id: template.template_id });
+    // live re-render for text/URL changes
+    const formEl = document.getElementById('c-form');
+    formEl.addEventListener('input', () => {
+      renderPreview(template, currentInputsForPreview(template));
+    });
+
+    // file → objectURL → preview (delegated listener)
+    formEl.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!t || t.type !== 'file' || !t.id) return;
+      const m = t.id.match(/^f_(.+)_file$/);
+      if (!m) return;
+      const key = m[1];
+
+      // revoke previous
+      const prev = localImages.get(key);
+      if (prev?.objectUrl) { try { URL.revokeObjectURL(prev.objectUrl); } catch{} }
+
+      // set new (or clear)
+      const file = t.files && t.files[0];
+      if (file) {
+        const objectUrl = URL.createObjectURL(file);
+        localImages.set(key, { objectUrl });
+        // optionally hint in the URL box
+        const urlEl = document.getElementById(`f_${key}_url`);
+        if (urlEl) { urlEl.value = ''; urlEl.placeholder = file.name; }
+      } else {
+        localImages.delete(key);
+      }
+      renderPreview(template, currentInputsForPreview(template));
     });
 
     document.getElementById('c-submit').onclick = async () => {
@@ -482,6 +484,7 @@ function currentInputsForPreview(template){
       document.getElementById('c-done').textContent = 'All good — ready to generate!';
     };
     document.getElementById('c-cancel').onclick = () => {
+      clearLocalImages();
       wrap.classList.add('hidden');
       document.getElementById('templates')?.classList.remove('hidden');
       document.getElementById('simPanel')?.classList.remove('hidden');
