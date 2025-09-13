@@ -98,8 +98,9 @@
     const frag = document.createDocumentFragment();
     records.forEach(t => {
       const li = document.createElement("li");
-      li.textContent = `${t.template_id} — ${t.name ?? ""}`;
-      frag.appendChild(li);
+      const typeLabel = (t?.TYPE || t?.type || '').toString();
+li.textContent = `${t.template_id} — ${t.name ?? ""}${typeLabel ? " — TYPE: " + typeLabel : ""}`;
+frag.appendChild(li);
     });
     listEl.appendChild(frag);
     return records;
