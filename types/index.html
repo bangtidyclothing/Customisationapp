@@ -122,6 +122,7 @@
         if (startEl) {
           const u = new URL('../index.html', location.href);
           u.searchParams.set('type', slug);
+          u.searchParams.set('noroute', '1');
           startEl.href = u.href;
         }
         return;
