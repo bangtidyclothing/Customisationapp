@@ -86,6 +86,32 @@
   }
 
   // ---- Safe URL ----
+    // ---- Local image preview state ----
+const localImages = new Map(); // key -> { objectUrl }
+function clearLocalImages(){
+  for (const v of localImages.values()) { try { URL.revokeObjectURL(v.objectUrl); } catch{} }
+  localImages.clear();
+}
+
+// Build the current inputs map, preferring local object URLs for image fields
+function currentInputsForPreview(template){
+  const out = { template_id: template?.template_id || '' };
+  const visible = getVisibleFields(template);
+  visible.forEach(f => {
+    if (f.type === 'text') {
+      out[f.key] = (document.getElementById(`f_${f.key}`)?.value || '').trim();
+    } else if (f.type === 'image') {
+      const local = localImages.get(f.key);
+      if (local?.objectUrl) {
+        out[f.key] = local.objectUrl;
+      } else {
+        out[f.key] = (document.getElementById(`f_${f.key}_url`)?.value || '').trim();
+      }
+    }
+  });
+  return out;
+}
+
   function safeUrl(u){ try { const url = new URL(u); return url.href; } catch { return ""; } }
 
   // ---- Normalisers ----
@@ -368,16 +394,67 @@
 
   // ---- Workflow ----
   function startWorkflow(template, ctx) {
-    document.getElementById('templates')?.classList.add('hidden');
-    document.getElementById('simPanel')?.classList.add('hidden');
+  // reset view + local file URLs
+  document.getElementById('templates')?.classList.add('hidden');
+  document.getElementById('simPanel')?.classList.add('hidden');
+  clearLocalImages();
 
-    const wrap = document.getElementById('customiser');
-    wrap.classList.remove('hidden');
-    document.getElementById('c-title').textContent = `${template.template_id} — ${template.name||''}`;
-    document.getElementById('c-errors').textContent = '';
-    document.getElementById('c-done').textContent = '';
+  const wrap = document.getElementById('customiser');
+  wrap.classList.remove('hidden');
+  document.getElementById('c-title').textContent = `${template.template_id} — ${template.name||''}`;
+  document.getElementById('c-errors').textContent = '';
+  document.getElementById('c-done').textContent = '';
 
-    buildForm(template, ctx.prefill);
+  buildForm(template, ctx.prefill);
+
+  // initial preview (uses any prefill)
+  renderPreview(template, { ...currentInputsForPreview(template) });
+
+  // live re-render for text/URL changes
+  const formEl = document.getElementById('c-form');
+  formEl.addEventListener('input', () => {
+    renderPreview(template, currentInputsForPreview(template));
+  });
+
+  // file → objectURL → preview (delegated listener)
+  formEl.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || t.type !== 'file' || !t.id) return;
+    const m = t.id.match(/^f_(.+)_file$/);
+    if (!m) return;
+    const key = m[1];
+
+    // revoke previous
+    const prev = localImages.get(key);
+    if (prev?.objectUrl) { try { URL.revokeObjectURL(prev.objectUrl); } catch{} }
+
+    // set new (or clear)
+    const file = t.files && t.files[0];
+    if (file) {
+      const objectUrl = URL.createObjectURL(file);
+      localImages.set(key, { objectUrl });
+      // optionally hint in the URL box
+      const urlEl = document.getElementById(`f_${key}_url`);
+      if (urlEl) { urlEl.value = ''; urlEl.placeholder = file.name; }
+    } else {
+      localImages.delete(key);
+    }
+    renderPreview(template, currentInputsForPreview(template));
+  });
+
+  document.getElementById('c-submit').onclick = async () => {
+    const { out, errs } = await collectForm(template);
+    if (errs.length) { document.getElementById('c-errors').textContent = errs.join(' • '); return; }
+    document.getElementById('c-done').textContent = 'All good — ready to generate!';
+  };
+  document.getElementById('c-cancel').onclick = () => {
+    clearLocalImages();
+    wrap.classList.add('hidden');
+    document.getElementById('templates')?.classList.remove('hidden');
+    document.getElementById('simPanel')?.classList.remove('hidden');
+  };
+}
+
 
     // initial preview
     renderPreview(template, { ...ctx.prefill, template_id: template.template_id });
