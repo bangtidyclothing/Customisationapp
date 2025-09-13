@@ -14,11 +14,11 @@
     ul{margin:6px 0 0 18px}
     code{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px}
     a{color:#06c}
-    #err{color:#b00020;margin-top:8px}
+    .hidden{display:none !important}
+    /* Button */
+    .btn{display:inline-block;padding:8px 14px;border:1px solid #99c;background:#eef;border-radius:8px;text-decoration:none}
+    .btn:hover{background:#e6eefc}
   </style>
-  .btn{display:inline-block;padding:8px 14px;border:1px solid #99c;background:#eef;border-radius:8px;text-decoration:none}
-.btn:hover{background:#e6eefc}
-
 </head>
 <body>
   <h1 id="title">Personalised <span class="badge" id="slugBadge"></span></h1>
@@ -34,13 +34,12 @@
   </div>
 
   <p class="meta" id="info"></p>
-<p id="err" class="hidden"></p>
+  <p id="err" class="hidden"></p>
 
-<!-- CTA: Open Designer -->
-<p><a id="startLink" class="btn">Open Designer</a></p>
+  <!-- CTA: Open Designer -->
+  <p><a id="startLink" class="btn" href="../index.html">Open Designer</a></p>
 
-<p><a href="../index.html">← Back</a></p>
-
+  <p><a href="../index.html">← Back</a></p>
 
   <script>
     // ---------- helpers ----------
@@ -63,7 +62,6 @@
       return path.endsWith('.html') ? path.slice(0, -5) : path;
     }
     function mdToHtml(md){
-      // tiny, safe-ish markdown -> html (bold, italic, code, line breaks)
       const esc = (s)=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       let h = esc(String(md||''));
       h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -79,11 +77,9 @@
       document.getElementById('title').firstChild.nodeValue = title + ' ';
       document.getElementById('slugBadge').textContent = `route: ${slug}`;
 
-      // instructions
       const instEl = document.getElementById('instructions');
       instEl.innerHTML = meta?.instructions_md ? mdToHtml(meta.instructions_md) : '—';
 
-      // requirements
       const ul = document.getElementById('reqList');
       ul.innerHTML = '';
       (meta?.requirements || []).forEach(item => {
@@ -93,7 +89,6 @@
         const li = document.createElement('li'); li.textContent = 'No special requirements.'; ul.appendChild(li);
       }
 
-      // context info
       document.getElementById('info').textContent =
         `template_id=${query.get('template_id')||''} · orderId=${query.get('orderId')||''} · name=${query.get('name')||''}`;
     }
@@ -111,21 +106,28 @@
 
       // Build API URL. Prefer template_id (exact), else fetch list and match by slug.
       const url = new URL(API_URL);
-      url.searchParams.set('type', 'kebab'); // so records include .type
-      url.searchParams.set('slug', '1');     // optional, for debugging shape
+      url.searchParams.set('type', 'kebab'); // include .type
+      url.searchParams.set('slug', '1');     // include .slug
       if (qs.get('template_id')) url.searchParams.set('template_id', qs.get('template_id'));
 
       let data;
       try {
         const res = await fetch(url.href, { credentials: 'omit', cache: 'no-store' });
         data = await res.json();
-      } catch (err) {
+      } catch {
         renderMeta(slug, null, qs);
-        return showError('Failed to load type details from API.');
+        showError('Failed to load type details from API.');
+        // still build a basic link
+        const startEl = document.getElementById('startLink');
+        if (startEl) {
+          const u = new URL('../index.html', location.href);
+          u.searchParams.set('type', slug);
+          startEl.href = u.href;
+        }
+        return;
       }
 
       const recs = Array.isArray(data?.records) ? data.records : [];
-      // Choose record
       let rec = null;
       if (qs.get('template_id')) {
         rec = recs[0] || null;
@@ -135,18 +137,19 @@
 
       const meta = rec?.typeMeta || null;
       renderMeta(slug, meta, qs);
-      // Build deep link to the main customiser (re-uses existing renderer)
-const startEl = document.getElementById('startLink');
-if (startEl) {
-  const u = new URL('../index.html', location.href);
-  if (rec?.template_id) u.searchParams.set('template_id', rec.template_id);
-  if (qs.get('orderId')) u.searchParams.set('orderId', qs.get('orderId'));
-  if (qs.get('name'))    u.searchParams.set('name', qs.get('name'));
-  if (qs.get('photo'))   u.searchParams.set('photo', qs.get('photo'));
-  u.searchParams.set('type', slug);
-  startEl.href = u.href;
-  startEl.textContent = rec?.name ? `Open Designer — ${rec.name}` : 'Open Designer';
-}
+
+      // Build deep link back to main customiser
+      const startEl = document.getElementById('startLink');
+      if (startEl) {
+        const u = new URL('../index.html', location.href);
+        if (rec?.template_id) u.searchParams.set('template_id', rec.template_id);
+        if (qs.get('orderId')) u.searchParams.set('orderId', qs.get('orderId'));
+        if (qs.get('name'))    u.searchParams.set('name', qs.get('name'));
+        if (qs.get('photo'))   u.searchParams.set('photo', qs.get('photo'));
+        u.searchParams.set('type', slug);
+        startEl.href = u.href;
+        startEl.textContent = rec?.name ? `Open Designer — ${rec.name}` : 'Open Designer';
+      }
 
       if (!rec) showError('No template record matched this TYPE.');
       else if (!meta) showError('This TYPE has no meta yet. Add fields in Airtable: type_title, type_instructions_md, type_requirements_json.');
