@@ -314,7 +314,8 @@
     const slug = toSlug(raw);
     if (!slug) return false;
 
-    const dest = `types/${slug}.html`;
+    // NEW (single generic types page with hash slug)
+const dest = `types/index.html#/${slug}`;
 
     // prevent loop if already on destination
     const path = location.pathname.replace(/^\//, '');
