@@ -318,6 +318,12 @@
 
   // ---- TYPE Router (dynamic) ----
   async function routeByType(template, extraParams = {}) {
+// NEW: allow types page to open the designer without bouncing back
+const noRouteFlag = String(qp('noroute') || qp('router') || '').toLowerCase();
+if (noRouteFlag === '1' || noRouteFlag === 'true' || noRouteFlag === 'off') {
+  return false; // skip routing
+}
+
     const raw = qp('type') || template?.TYPE || template?.type || '';
     const slug = toSlug(raw);
     if (!slug) return false;
