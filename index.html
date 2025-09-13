@@ -262,7 +262,7 @@
     }
 
     const parts = [
-      `<svg xmlns="http://http://www.w3.org/2000/svg" width="${cw}mm" height="${ch}mm" viewBox="0 0 ${vbW} ${vbH}">`,
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${cw}mm" height="${ch}mm" viewBox="0 0 ${vbW} ${vbH}">`,
       `<rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>`
     ];
 
@@ -417,14 +417,19 @@
     const orderId    = qp("orderId");
     const name       = qp("name");
     const photo      = safeUrl(qp("photo"));
-    if (!templateId) return false;
 
-    const wanted = templateId.toLowerCase();
-    let tpl = records.find(t => (t.template_id||"").toLowerCase() === wanted);
-    if (!tpl) {
-      // fallback: by type slug from ?type=...
-      const slug = toSlug(qp('type'));
-      if (slug) tpl = records.find(t => (t.type || toSlug(t.TYPE || '')) === slug);
+    // If no template signal at all, don't auto-start or route
+    const typeSlugFromQuery = toSlug(qp('type'));
+    if (!templateId && !typeSlugFromQuery) return false;
+
+    // find record by template_id or by type slug
+    let tpl = null;
+    if (templateId) {
+      const wanted = templateId.toLowerCase();
+      tpl = records.find(t => (t.template_id||"").toLowerCase() === wanted) || null;
+    }
+    if (!tpl && typeSlugFromQuery) {
+      tpl = records.find(t => (t.type || toSlug(t.TYPE || '')) === typeSlugFromQuery) || null;
     }
     if (!tpl) return false;
 
@@ -435,6 +440,13 @@
         if (f.type === "image" && photo) prefill[f.key] = photo;
       }
     }
+
+    // Hard skip routing if any skip flag is present
+    if (hasNoRouteFlag()) {
+      startWorkflow(tpl, { orderId, prefill });
+      return true;
+    }
+
     if (await routeByType(tpl, { orderId, name, photo })) return true;
     startWorkflow(tpl, { orderId, prefill });
     return true;
@@ -489,6 +501,13 @@
           if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
         }
       }
+
+      // If skip flags exist, don't route—render here
+      if (hasNoRouteFlag()) {
+        startWorkflow(tpl, { orderId, prefill });
+        return;
+      }
+
       if (await routeByType(tpl, { orderId, name, photo: safeUrl(photo) || '' })) return;
       startWorkflow(tpl, { orderId, prefill });
     });
