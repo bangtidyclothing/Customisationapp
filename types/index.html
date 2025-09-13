@@ -5,20 +5,37 @@
   <title>Custom Type — Personalised</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    :root { --bd:#ddd; --muted:#666; }
     body{font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:24px}
     .badge{display:inline-block;background:#eef;border:1px solid #99c;padding:4px 8px;border-radius:8px;margin-left:8px;font-size:12px;color:#224}
     .meta{color:#555;margin-top:8px}
+    .card{border:1px solid var(--bd); border-radius:12px; padding:12px; margin-top:12px; background:#fff}
+    h2{margin:0 0 8px}
+    ul{margin:6px 0 0 18px}
+    code{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px}
+    a{color:#06c}
   </style>
 </head>
 <body>
   <h1 id="title">Personalised <span class="badge" id="slugBadge"></span></h1>
+
+  <div class="card">
+    <h2>Instructions</h2>
+    <div id="instructions" class="meta">Loading…</div>
+  </div>
+
+  <div class="card">
+    <h2>Requirements</h2>
+    <ul id="reqList"></ul>
+  </div>
+
   <p class="meta" id="info"></p>
   <p><a href="../index.html">← Back</a></p>
 
   <script>
-    function toTitleCase(s){
-      return String(s||'').split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
-    }
+    // ----- helpers -----
+    function toSlug(s){ return String(s||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
+    function toTitleCase(s){ return String(s||'').split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '); }
     function getSlug(){
       // Prefer hash: /types/index.html#/photo-gift-wrap
       const hash = (location.hash || '').replace(/^#\/?/, '').split(/[?#]/)[0].trim();
@@ -26,23 +43,74 @@
       // Fallback query: ?type=beer mat -> beer-mat
       const qs = new URLSearchParams(location.search);
       const t = qs.get('type');
-      if (t) return t.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g,'');
+      if (t) return toSlug(t);
       // Last resort: if accessed as /types/beer-mat.html
       const path = (location.pathname.split('/types/')[1] || '').replace(/\/+$/,'');
       return path.endsWith('.html') ? path.slice(0, -5) : path;
     }
 
+    // ----- Type Registry (data-driven) -----
+    // Add new entries here; no code changes elsewhere.
+    const TYPE_META = {
+      'beer-mat': {
+        title: 'Beer Mat — Personalised',
+        instructions: `
+          Enter your text and review the live preview. Keep it short for best readability.
+          Avoid low-contrast colours on dark artwork.`,
+        requirements: [
+          'One line of text (max suggested: 20 chars)',
+          'No emojis/special glyphs that aren’t supported by the print font',
+          'Text colour auto from template (edit not required)'
+        ]
+      },
+      'beer-mat-photo': {
+        title: 'Photo Beer Mat — Personalised',
+        instructions: `
+          Upload a square-ish photo. We crop using <code>cover</code> to fill the frame.
+          Drag &amp; zoom aren’t needed here; use a centered subject where possible.`,
+        requirements: [
+          'Photo ≥ 1200×1200 px recommended',
+          'Subject centered — faces not near the edges',
+          'One optional text line'
+        ]
+      },
+      'photo-gift-wrap': {
+        title: 'Photo Gift Wrap — Personalised',
+        instructions: `
+          Upload a high-res photo. We tile/fit per the template spec and crop using
+          <code>cover</code>. For patterns, prefer seamless images.`,
+        requirements: [
+          'High-resolution image (≥ 3000px on the longest side)',
+          'No watermarks or logos unless you own the rights',
+          'Check preview for edge cropping'
+        ]
+      }
+    };
+
+    // Default if a slug has no explicit entry above
+    function defaultMeta(slug){
+      return {
+        title: `${toTitleCase(slug)} — Personalised`,
+        instructions: `Follow the on-screen fields and review the preview. This is a generic flow for <code>${slug}</code>.`,
+        requirements: ['Provide all required fields', 'Review preview', 'Proceed to generate']
+      };
+    }
+
+    // ----- render -----
     (function boot(){
       const slug = getSlug() || 'unknown';
-      const friendly = {
-        'beer-mat': 'Beer Mat — Personalised',
-        'beer-mat-photo': 'Photo Beer Mat — Personalised',
-        'photo-gift-wrap': 'Photo Gift Wrap — Personalised'
-      }[slug] || `${toTitleCase(slug)} — Personalised`;
+      const meta = TYPE_META[slug] || defaultMeta(slug);
 
-      document.title = friendly;
-      document.getElementById('title').firstChild.nodeValue = friendly + ' ';
+      document.title = meta.title;
+      document.getElementById('title').firstChild.nodeValue = meta.title + ' ';
       document.getElementById('slugBadge').textContent = `route: ${slug}`;
+      document.getElementById('instructions').innerHTML = meta.instructions;
+
+      const ul = document.getElementById('reqList');
+      ul.innerHTML = '';
+      (meta.requirements || []).forEach(item => {
+        const li = document.createElement('li'); li.textContent = item; ul.appendChild(li);
+      });
 
       const p = new URLSearchParams(location.search);
       document.getElementById('info').textContent =
