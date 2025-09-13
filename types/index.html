@@ -10,10 +10,11 @@
     .badge{display:inline-block;background:#eef;border:1px solid #99c;padding:4px 8px;border-radius:8px;margin-left:8px;font-size:12px;color:#224}
     .meta{color:#555;margin-top:8px}
     .card{border:1px solid var(--bd); border-radius:12px; padding:12px; margin-top:12px; background:#fff}
-    h2{margin:0 0 8px}
+    h1,h2{margin:0 0 8px}
     ul{margin:6px 0 0 18px}
     code{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px}
     a{color:#06c}
+    #err{color:#b00020;margin-top:8px}
   </style>
 </head>
 <body>
@@ -21,7 +22,7 @@
 
   <div class="card">
     <h2>Instructions</h2>
-    <div id="instructions" class="meta">Loading…</div>
+    <div id="instructions" class="meta">Loading type details…</div>
   </div>
 
   <div class="card">
@@ -30,91 +31,104 @@
   </div>
 
   <p class="meta" id="info"></p>
+  <p id="err" class="hidden"></p>
   <p><a href="../index.html">← Back</a></p>
 
   <script>
-    // ----- helpers -----
-    function toSlug(s){ return String(s||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
-    function toTitleCase(s){ return String(s||'').split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '); }
+    // ---------- helpers ----------
+    const API_URL = "https://customisationapp-new.vercel.app/api/templates";
+
+    function toSlug(s){
+      return String(s||'').toLowerCase().trim()
+        .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+    }
+    function toTitleCase(s){
+      return String(s||'').split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+    }
     function getSlug(){
-      // Prefer hash: /types/index.html#/photo-gift-wrap
       const hash = (location.hash || '').replace(/^#\/?/, '').split(/[?#]/)[0].trim();
       if (hash) return hash;
-      // Fallback query: ?type=beer mat -> beer-mat
       const qs = new URLSearchParams(location.search);
       const t = qs.get('type');
       if (t) return toSlug(t);
-      // Last resort: if accessed as /types/beer-mat.html
       const path = (location.pathname.split('/types/')[1] || '').replace(/\/+$/,'');
       return path.endsWith('.html') ? path.slice(0, -5) : path;
     }
-
-    // ----- Type Registry (data-driven) -----
-    // Add new entries here; no code changes elsewhere.
-    const TYPE_META = {
-      'beer-mat': {
-        title: 'Beer Mat — Personalised',
-        instructions: `
-          Enter your text and review the live preview. Keep it short for best readability.
-          Avoid low-contrast colours on dark artwork.`,
-        requirements: [
-          'One line of text (max suggested: 20 chars)',
-          'No emojis/special glyphs that aren’t supported by the print font',
-          'Text colour auto from template (edit not required)'
-        ]
-      },
-      'beer-mat-photo': {
-        title: 'Photo Beer Mat — Personalised',
-        instructions: `
-          Upload a square-ish photo. We crop using <code>cover</code> to fill the frame.
-          Drag &amp; zoom aren’t needed here; use a centered subject where possible.`,
-        requirements: [
-          'Photo ≥ 1200×1200 px recommended',
-          'Subject centered — faces not near the edges',
-          'One optional text line'
-        ]
-      },
-      'photo-gift-wrap': {
-        title: 'Photo Gift Wrap — Personalised',
-        instructions: `
-          Upload a high-res photo. We tile/fit per the template spec and crop using
-          <code>cover</code>. For patterns, prefer seamless images.`,
-        requirements: [
-          'High-resolution image (≥ 3000px on the longest side)',
-          'No watermarks or logos unless you own the rights',
-          'Check preview for edge cropping'
-        ]
-      }
-    };
-
-    // Default if a slug has no explicit entry above
-    function defaultMeta(slug){
-      return {
-        title: `${toTitleCase(slug)} — Personalised`,
-        instructions: `Follow the on-screen fields and review the preview. This is a generic flow for <code>${slug}</code>.`,
-        requirements: ['Provide all required fields', 'Review preview', 'Proceed to generate']
-      };
+    function mdToHtml(md){
+      // tiny, safe-ish markdown -> html (bold, italic, code, line breaks)
+      const esc = (s)=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      let h = esc(String(md||''));
+      h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+      h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      h = h.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      return h.replace(/\n/g,'<br>');
     }
 
-    // ----- render -----
-    (function boot(){
-      const slug = getSlug() || 'unknown';
-      const meta = TYPE_META[slug] || defaultMeta(slug);
-
-      document.title = meta.title;
-      document.getElementById('title').firstChild.nodeValue = meta.title + ' ';
+    // ---------- render ----------
+    function renderMeta(slug, meta, query){
+      const title = meta?.title || `${toTitleCase(slug)} — Personalised`;
+      document.title = title;
+      document.getElementById('title').firstChild.nodeValue = title + ' ';
       document.getElementById('slugBadge').textContent = `route: ${slug}`;
-      document.getElementById('instructions').innerHTML = meta.instructions;
 
+      // instructions
+      const instEl = document.getElementById('instructions');
+      instEl.innerHTML = meta?.instructions_md ? mdToHtml(meta.instructions_md) : '—';
+
+      // requirements
       const ul = document.getElementById('reqList');
       ul.innerHTML = '';
-      (meta.requirements || []).forEach(item => {
+      (meta?.requirements || []).forEach(item => {
         const li = document.createElement('li'); li.textContent = item; ul.appendChild(li);
       });
+      if ((meta?.requirements || []).length === 0) {
+        const li = document.createElement('li'); li.textContent = 'No special requirements.'; ul.appendChild(li);
+      }
 
-      const p = new URLSearchParams(location.search);
+      // context info
       document.getElementById('info').textContent =
-        `template_id=${p.get('template_id')||''} · orderId=${p.get('orderId')||''} · name=${p.get('name')||''}`;
+        `template_id=${query.get('template_id')||''} · orderId=${query.get('orderId')||''} · name=${query.get('name')||''}`;
+    }
+
+    function showError(msg){
+      const e = document.getElementById('err');
+      e.classList.remove('hidden');
+      e.textContent = msg;
+    }
+
+    // ---------- boot ----------
+    (async function boot(){
+      const slug = getSlug() || 'unknown';
+      const qs = new URLSearchParams(location.search);
+
+      // Build API URL. Prefer template_id (exact), else fetch list and match by slug.
+      const url = new URL(API_URL);
+      url.searchParams.set('type', 'kebab'); // so records include .type
+      url.searchParams.set('slug', '1');     // optional, for debugging shape
+      if (qs.get('template_id')) url.searchParams.set('template_id', qs.get('template_id'));
+
+      let data;
+      try {
+        const res = await fetch(url.href, { credentials: 'omit', cache: 'no-store' });
+        data = await res.json();
+      } catch (err) {
+        renderMeta(slug, null, qs);
+        return showError('Failed to load type details from API.');
+      }
+
+      const recs = Array.isArray(data?.records) ? data.records : [];
+      // Choose record
+      let rec = null;
+      if (qs.get('template_id')) {
+        rec = recs[0] || null;
+      } else {
+        rec = recs.find(r => (r.type || toSlug(r.TYPE || '')) === slug) || null;
+      }
+
+      const meta = rec?.typeMeta || null;
+      renderMeta(slug, meta, qs);
+      if (!rec) showError('No template record matched this TYPE.');
+      else if (!meta) showError('This TYPE has no meta yet. Add fields in Airtable: type_title, type_instructions_md, type_requirements_json.');
     })();
   </script>
 </body>
