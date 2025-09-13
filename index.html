@@ -35,18 +35,18 @@
   <div class="card" id="simPanel">
     <strong>Simulate Jotform</strong>
     <div class="row" style="margin-top:8px;">
-      <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-ra816)" />
+      <input id="simTpl" placeholder="template_id (e.g. CO-CARD-PHOTO-12)" />
       <input id="simName" placeholder="name" />
       <input id="simOrder" placeholder="orderId" />
       <input id="simPhoto" placeholder="photo URL (optional)" />
       <button id="simBtn">Start</button>
     </div>
     <div style="margin-top:8px; color: var(--muted); font-size: 12px;">
-      Tip: copy a template_id from the list above, enter name/orderId, and click Start.
+      Tip: click a template in the list to auto-fill its ID, then click Start.
     </div>
   </div>
 
-  <!-- Customiser -->
+  <!-- Customiser (fallback when no TYPE page exists) -->
   <div id="customiser" class="card hidden">
     <div id="c-head"><strong id="c-title"></strong></div>
     <form id="c-form" style="margin-top:8px;"></form>
@@ -80,11 +80,32 @@
     const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
     if (!res.ok) { console.error("Template fetch failed", res.status); return []; }
     const data = await res.json();
-    return Array.isArray(data.records) ? data.records : [];
+    return (Array.isArray(data.records) ? data.records : [])
+      .map(normalizeRecord)
+      .filter(r => r.template_id); // drop blanks
   }
 
   // ---- Safe URL ----
   function safeUrl(u){ try { const url = new URL(u); return url.href; } catch { return ""; } }
+
+  // ---- Normalisers ----
+  function clean(s){ return String(s||'').replace(/\s+/g,' ').trim(); }
+  function toSlug(s){ return clean(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
+  function parseTemplateId(input){
+    // grab first id-like token (letters/numbers/_/-), ignore long pasted lines
+    const s = String(input||'').trim();
+    const m = s.match(/[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*/);
+    return m ? m[0] : clean(s);
+  }
+  function normalizeRecord(t){
+    const id   = clean(t.template_id);
+    const name = clean(t.name);
+    const TYPE = clean(t.TYPE || t.type || '');
+    const typeKebab = t.type ? clean(t.type) : toSlug(TYPE);
+    let base = t.base_image;
+    if (Array.isArray(base) && base[0]?.url) base = base[0].url; // Airtable attachment -> URL
+    return { ...t, template_id:id, name, TYPE, type:typeKebab, base_image: base || null };
+  }
 
   // ---- Render list ----
   async function renderList() {
@@ -98,8 +119,9 @@
     const frag = document.createDocumentFragment();
     records.forEach(t => {
       const li = document.createElement("li");
-      const typeLabel = (t?.TYPE || t?.type || '').toString();
-      li.textContent = `${t.template_id} — ${t.name ?? ""}${typeLabel ? " — TYPE: " + typeLabel : ""}`;
+      const typeLabel = (t.type || toSlug(t.TYPE || '')).replace(/-/g,' ');
+      const typeTitle = typeLabel ? typeLabel.replace(/\b\w/g, c => c.toUpperCase()) : "";
+      li.textContent = `${t.template_id} — ${t.name ?? ""}${typeTitle ? " — TYPE: " + typeTitle : ""}`;
       frag.appendChild(li);
     });
     listEl.appendChild(frag);
@@ -193,7 +215,7 @@
         const urlEl = document.getElementById(`f_${field.key}_url`);
         const fileEl = document.getElementById(`f_${field.key}_file`);
         let val = (urlEl?.value || "").trim();
-        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name;
+        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder until upload
         if (required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
@@ -220,12 +242,8 @@
   // ---- SVG composer (with base image + text fill support) ----
   function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
     const rImg = imgW / imgH, rBox = boxW / boxH;
-    let w,h;
-    if (mode==='cover'){
-      if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; }
-    } else {
-      if (rImg>rBox){ w=boxW; h=w/rImg; } else { h=boxH; w=h*rImg; }
-    }
+    let w,h; if (mode==='cover'){ if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; } }
+    else { if (rImg>rBox){ w=boxW; h=w/rImg; } else { h=boxH; w=h*rImg; } }
     return { x:(boxW-w)/2, y:(boxH-h)/2, w, h };
   }
 
@@ -265,8 +283,7 @@
         const url = inputs[el.key]; if (!url) continue;
         const box = {x:el.x||0,y:el.y||0,w:el.w||vbW,h:el.h||vbH};
         const s = await imgSize(url);
-        if (s){
-          const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
+        if (s){ const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
           parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x+fit.x}" y="${box.y+fit.y}" width="${fit.w}" height="${fit.h}" preserveAspectRatio="none"/>`);
         } else {
           parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" preserveAspectRatio="none"/>`);
@@ -299,27 +316,18 @@
     mount.innerHTML = svg;
   }
 
-  // ---- TYPE Router (dynamic) [ROUTER v1] ----
-  function toSlug(s){
-    return String(s || '')
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-  }
-
-  // Redirects to /types/<slug>.html; accepts ?type= override for testing.
+  // ---- TYPE Router (dynamic) ----
   async function routeByType(template, extraParams = {}) {
     const raw = qp('type') || template?.TYPE || template?.type || '';
     const slug = toSlug(raw);
     if (!slug) return false;
 
-    // NEW (single generic types page with hash slug)
-const dest = `types/index.html#/${slug}`;
+    // Generic types page + hash slug avoids per-file creation
+    const dest = `types/index.html#/${slug}`;
 
-    // prevent loop if already on destination
+    // prevent loop if already there
     const path = location.pathname.replace(/^\//, '');
-    if (path.endsWith(dest)) return false;
+    if (path.endsWith('types/index.html') && location.hash.replace(/^#\/?/, '') === slug) return false;
 
     // carry through params
     const p = new URLSearchParams(location.search || (location.hash || '').replace(/^#/, ''));
@@ -379,13 +387,19 @@ const dest = `types/index.html#/${slug}`;
 
   // ---- Boot from URL params ----
   async function bootFromJotform(records) {
-    const templateId = qp("template_id");
+    const templateId = clean(qp("template_id"));
     const orderId    = qp("orderId");
     const name       = qp("name");
     const photo      = safeUrl(qp("photo"));
     if (!templateId) return false;
 
-    const tpl = (records||[]).find(t => (t.template_id||"").toLowerCase() === templateId.toLowerCase());
+    const wanted = templateId.toLowerCase();
+    let tpl = records.find(t => (t.template_id||"").toLowerCase() === wanted);
+    if (!tpl) {
+      // fallback: by type slug from ?type=...
+      const slug = toSlug(qp('type'));
+      if (slug) tpl = records.find(t => (t.type || toSlug(t.TYPE || '')) === slug);
+    }
     if (!tpl) return false;
 
     const prefill = {};
@@ -404,15 +418,43 @@ const dest = `types/index.html#/${slug}`;
   (async function init() {
     const records = await renderList();
 
-    // Simulator (async so we can await routeByType)
-    document.getElementById("simBtn").addEventListener("click", async () => {
-      const templateId = document.getElementById("simTpl").value.trim();
-      const name = document.getElementById("simName").value.trim();
-      const orderId = document.getElementById("simOrder").value.trim();
-      const photo = document.getElementById("simPhoto").value.trim();
+    // Build indexes for robust lookup
+    const byId   = new Map();
+    const byType = new Map();
+    records.forEach(r => {
+      byId.set((r.template_id||'').toLowerCase(), r);
+      const slug = (r.type || toSlug(r.TYPE || '')).toLowerCase();
+      if (slug) byType.set(slug, r);
+    });
 
-      const tpl = records.find(t => (t.template_id||"").toLowerCase() === templateId.toLowerCase());
-      if (!tpl) { alert("Template not found."); return; }
+    // Click a row to auto-fill simTpl with the clean template_id
+    document.getElementById("templates-list").addEventListener("click", (e) => {
+      const li = e.target.closest("li");
+      if (!li) return;
+      const id = parseTemplateId(li.textContent);
+      const box = document.getElementById("simTpl");
+      if (id && box) box.value = id;
+    });
+
+    // Simulator (robust lookup by ID, fallback to TYPE)
+    document.getElementById("simBtn").addEventListener("click", async () => {
+      const rawTpl  = document.getElementById("simTpl").value;
+      const templateId = parseTemplateId(rawTpl).toLowerCase();
+      const name    = document.getElementById("simName").value.trim();
+      const orderId = document.getElementById("simOrder").value.trim();
+      const photo   = document.getElementById("simPhoto").value.trim();
+
+      let tpl = byId.get(templateId);
+      if (!tpl) {
+        const slug = toSlug(rawTpl);
+        tpl = byType.get(slug);
+      }
+
+      if (!tpl) {
+        console.debug('Lookup failed', { triedId: templateId, raw: rawTpl, ids: Array.from(byId.keys()), types: Array.from(byType.keys()) });
+        alert("Template not found.");
+        return;
+      }
 
       const prefill = {};
       if (Array.isArray(tpl.fields)) {
