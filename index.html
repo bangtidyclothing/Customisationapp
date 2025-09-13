@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Customisation App</title>
+  <title>Bang Tidy Clothing Customisation App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root { --bd:#ddd; --muted:#666; --bg:#fafafa; --fg:#111; }
@@ -98,7 +98,8 @@
     const frag = document.createDocumentFragment();
     records.forEach(t => {
       const li = document.createElement("li");
-      li.textContent = `${t.template_id} — ${t.name ?? ""}`;
+      const typeLabel = (t?.TYPE || t?.type || '').toString();
+      li.textContent = `${t.template_id} — ${t.name ?? ""}${typeLabel ? " — TYPE: " + typeLabel : ""}`;
       frag.appendChild(li);
     });
     listEl.appendChild(frag);
@@ -108,42 +109,30 @@
   // ---- Field filtering using table-level flags ----
   function getVisibleFields(template) {
     const layoutKeys = new Set((template.layout?.elements || []).map(e => e.key).filter(Boolean));
-
-    // Defaults: visible unless explicitly turned off
     const wantsPhoto = template.requires_photo !== false;
     const wantsText  = template.requires_text  !== false;
 
     let fields = Array.isArray(template.fields) ? template.fields : [];
-
-    // If layout exists, only keep fields referenced in layout
     if (layoutKeys.size) fields = fields.filter(f => layoutKeys.has(f.key));
 
-    // Hide by requires_* flags
     fields = fields.filter(f => {
       if (f.type === 'image' && !wantsPhoto) return false;
       if (f.type === 'text'  && !wantsText)  return false;
       return true;
     });
 
-    // Respect per-field overrides from fields_json
     fields = fields.filter(f => f.hidden !== true && f.editable !== false);
-
     return fields;
   }
 
   // ---- Determine effective 'required' based on optional flags ----
   function isFieldRequired(template, field) {
-    // Table-level optional flags
     const optAll   = !!template.optional;
     const optPhoto = !!template.optional_photo;
     const optText  = !!template.optional_text;
-
-    // If any applicable optional flag is true -> not required
     if (optAll) return false;
     if (field.type === 'image' && optPhoto) return false;
     if (field.type === 'text'  && optText)  return false;
-
-    // Otherwise fall back to field.required (default=false)
     return !!field.required;
   }
 
@@ -204,7 +193,7 @@
         const urlEl = document.getElementById(`f_${field.key}_url`);
         const fileEl = document.getElementById(`f_${field.key}_file`);
         let val = (urlEl?.value || "").trim();
-        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder until upload
+        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name;
         if (required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
@@ -231,8 +220,12 @@
   // ---- SVG composer (with base image + text fill support) ----
   function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
     const rImg = imgW / imgH, rBox = boxW / boxH;
-    let w,h; if (mode==='cover'){ if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; } }
-    else { if (rImg>rBox){ w=boxW; h=w/rImg; } else { h=boxH; w=h*rImg; } }
+    let w,h;
+    if (mode==='cover'){
+      if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; }
+    } else {
+      if (rImg>rBox){ w=boxW; h=w/rImg; } else { h=boxH; w=h*rImg; }
+    }
     return { x:(boxW-w)/2, y:(boxH-h)/2, w, h };
   }
 
@@ -272,7 +265,8 @@
         const url = inputs[el.key]; if (!url) continue;
         const box = {x:el.x||0,y:el.y||0,w:el.w||vbW,h:el.h||vbH};
         const s = await imgSize(url);
-        if (s){ const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
+        if (s){
+          const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
           parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x+fit.x}" y="${box.y+fit.y}" width="${fit.w}" height="${fit.h}" preserveAspectRatio="none"/>`);
         } else {
           parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" preserveAspectRatio="none"/>`);
@@ -303,6 +297,38 @@
     const aligned = normalizeInputsForLayout(template.layout, inputs, visible);
     const svg = await composeSVG(template.layout, aligned, baseUrl);
     mount.innerHTML = svg;
+  }
+
+  // ---- TYPE Router (dynamic) [ROUTER v1] ----
+  function toSlug(s){
+    return String(s || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  // Redirects to /types/<slug>.html; accepts ?type= override for testing.
+  async function routeByType(template, extraParams = {}) {
+    const raw = qp('type') || template?.TYPE || template?.type || '';
+    const slug = toSlug(raw);
+    if (!slug) return false;
+
+    const dest = `types/${slug}.html`;
+
+    // prevent loop if already on destination
+    const path = location.pathname.replace(/^\//, '');
+    if (path.endsWith(dest)) return false;
+
+    // carry through params
+    const p = new URLSearchParams(location.search || (location.hash || '').replace(/^#/, ''));
+    if (template?.template_id) p.set('template_id', template.template_id);
+    for (const [k, v] of Object.entries(extraParams)) {
+      if (v != null && v !== '') p.set(k, v);
+    }
+
+    location.assign(`${dest}?${p.toString()}`);
+    return true;
   }
 
   // ---- Workflow ----
@@ -368,6 +394,7 @@
         if (f.type === "image" && photo) prefill[f.key] = photo;
       }
     }
+    if (await routeByType(tpl, { orderId, name, photo })) return true;
     startWorkflow(tpl, { orderId, prefill });
     return true;
   }
@@ -376,8 +403,8 @@
   (async function init() {
     const records = await renderList();
 
-    // Simulator
-    document.getElementById("simBtn").addEventListener("click", () => {
+    // Simulator (async so we can await routeByType)
+    document.getElementById("simBtn").addEventListener("click", async () => {
       const templateId = document.getElementById("simTpl").value.trim();
       const name = document.getElementById("simName").value.trim();
       const orderId = document.getElementById("simOrder").value.trim();
@@ -393,6 +420,7 @@
           if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
         }
       }
+      if (await routeByType(tpl, { orderId, name, photo: safeUrl(photo) || '' })) return;
       startWorkflow(tpl, { orderId, prefill });
     });
 
