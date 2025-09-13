@@ -1,122 +1,147 @@
 // /api/templates.js
-// Returns { records: [...] } in legacy shape + parsed `layout` + `base_image`
-// Also surfaces requires_* and optional_* flags from Airtable.
-
 export default async function handler(req, res) {
-  const q = req.query || {};
-  const slugifyId = q.slug === "1" || q.slug === "true";
-  const kebabType = q.type === "kebab";
+  // --- CORS / method guard ---
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  // CORS
-  res.setHeader("access-control-allow-origin", process.env.ALLOWED_ORIGIN || "*");
-  res.setHeader("access-control-allow-methods", "GET, OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type");
+  // --- Env ---
+  const API_KEY   = process.env.AIRTABLE_API_KEY;
+  const BASE_ID   = process.env.AIRTABLE_BASE_ID || process.env.AIRTABLE_BASE;   // support either name
+  const TABLE     = process.env.AIRTABLE_TABLE || 'templates';
+  const API_ROOT  = process.env.AIRTABLE_API || 'https://api.airtable.com/v0';
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
-
-  const {
-    AIRTABLE_API_KEY,
-    AIRTABLE_BASE_ID,
-    AIRTABLE_TABLE_NAME = "Templates",
-  } = process.env;
-  if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID) {
-    return res.status(500).json({ error: "Missing env variables" });
+  if (!API_KEY || !BASE_ID) {
+    return res.status(500).json({ error: 'Airtable env not configured' });
   }
 
-  const base = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE_ID)}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
-  const params = new URLSearchParams({ filterByFormula: "AND({active}=TRUE())", pageSize: "100" });
-  const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}` };
+  // --- Query params ---
+  const qp = req.query || {};
+  const wantSlugObj    = String(qp.slug || '') === '1';
+  const wantKebabType  = String(qp.type || '') === 'kebab';
+  const filterTemplate = (qp.template_id || '').toString().trim();
 
-  const clean = (s) => (typeof s === "string" ? s.trim() : s);
-  const toKebab = (s) => clean(s)?.toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const bestId = (f) => clean(f.template_id) || clean(f.SKU) || clean(f.sku_pattern) || clean(f.name) || null;
+  // --- Helpers ---
+  const toKebab = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
 
-  const firstUrl = (v) => {
-    if (!v) return null;
-    if (typeof v === "string") return clean(v) || null;
-    if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
-    return null;
+  const safeParse = (v, fallback = null) => {
+    if (v == null) return fallback;
+    if (typeof v === 'object') return v; // already parsed
+    try { return JSON.parse(v); } catch { return fallback; }
   };
 
-  const mapLegacy = (rec) => {
-    const f = rec.fields || {};
+  const safeArray = (v) => {
+    if (Array.isArray(v)) return v;
+    const p = safeParse(v, []);
+    return Array.isArray(p) ? p : [];
+  };
 
-    // fields_json
-    let fields;
-    try {
-      if (Array.isArray(f.fields_json)) fields = f.fields_json;
-      else if (typeof f.fields_json === "string") fields = JSON.parse(f.fields_json);
-    } catch (_) {}
+  const safeFields = (v) => {
+    const arr = safeArray(v);
+    // minimal validation: ensure each item has a key/type
+    return arr.filter(x => x && typeof x === 'object' && (x.key || x.id || x.name));
+  };
 
-    // layout
-    let layout;
-    try {
-      if (f.Layout_spec && typeof f.Layout_spec === "string") layout = JSON.parse(f.Layout_spec);
-      else if (f.Layout_spec && typeof f.Layout_spec === "object") layout = f.Layout_spec;
-    } catch (_) {}
-
-    // images
-    const base_image = firstUrl(f.base_image) || firstUrl(f.Base_image) || firstUrl(f.hero) || null;
-
-    // flags (accept true/false or "true"/"false")
-    const asBool = (v) => v === true || v === "true";
-    const requires_photo = asBool(f.requires_photo) || false === f.requires_photo ? asBool(f.requires_photo) : true; // default true
-    const requires_text  = asBool(f.requires_text)  || false === f.requires_text  ? asBool(f.requires_text)  : true; // default true
-
-    const optional_photo = asBool(f.optional_photo) || false; // default false
-    const optional_text  = asBool(f.optional_text)  || false; // default false
-    const optional_all   = asBool(f.optional)       || false; // default false
-
-    // id/type
-    let id = bestId(f);
-    if (slugifyId && id) {
-      const slug = toKebab(id);
-      id = slug.startsWith("tpl-") ? slug : `tpl-${slug}`;
+  const safeLayout = (v) => {
+    const o = safeParse(v, null);
+    if (!o || typeof o !== 'object') return null;
+    // normalise a couple of common shapes
+    if (Array.isArray(o.elements)) {
+      return o;
     }
-    let typeOut = clean(f.TYPE ?? null);
-    if (kebabType && typeOut) typeOut = toKebab(typeOut);
+    // sometimes layout comes as { layout: { elements: [...] } }
+    if (o.layout && Array.isArray(o.layout.elements)) {
+      return o.layout;
+    }
+    return o;
+  };
 
-    const out = {
-      template_id: id,
-      TYPE: typeOut ?? null,
-      sku_pattern: clean(f.sku_pattern) ?? null,
-      name: clean(f.name) ?? null,
-      SKU: clean(f.SKU) ?? null,
+  // --- Fields to fetch from Airtable ---
+  const FIELDS = [
+    'template_id', 'name', 'TYPE',
+    'fields_json', 'layout_spec',
+    'requires_photo', 'requires_text',
+    'optional', 'optional_photo', 'optional_text',
+    'base_image',
+    // NEW:
+    'type_title', 'type_instructions_md', 'type_requirements_json'
+  ];
 
-      // flags to drive UI
-      requires_photo,
-      requires_text,
-      optional_photo,
-      optional_text,
-      optional: optional_all,
+  // --- Build Airtable URL ---
+  const search = [];
+  search.push('pageSize=100');
+  search.push('view=' + encodeURIComponent('Grid view'));
+  for (const f of FIELDS) search.push('fields[]=' + encodeURIComponent(f));
+
+  if (filterTemplate) {
+    // filterByFormula: {template_id} = '...'
+    const quoted = filterTemplate.replace(/'/g, "\\'");
+    const formula = `({template_id} = '${quoted}')`;
+    search.push('filterByFormula=' + encodeURIComponent(formula));
+  }
+
+  const url = `${API_ROOT}/${encodeURIComponent(BASE_ID)}/${encodeURIComponent(TABLE)}?${search.join('&')}`;
+
+  // --- Fetch Airtable ---
+  let data;
+  try {
+    const atRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${API_KEY}` }
+    });
+    if (!atRes.ok) {
+      const txt = await atRes.text().catch(() => '');
+      return res.status(atRes.status).json({ error: 'Airtable error', details: txt });
+    }
+    data = await atRes.json();
+  } catch (e) {
+    return res.status(502).json({ error: 'Upstream fetch failed', details: String(e && e.message || e) });
+  }
+
+  const atRecords = Array.isArray(data.records) ? data.records : [];
+
+  // --- Map records to frontend shape ---
+  const records = atRecords.map(r => {
+    const f = r.fields || {};
+    const fields = safeFields(f.fields_json);
+    const layout = safeLayout(f.layout_spec);
+
+    const meta = {
+      title: f.type_title || null,
+      instructions_md: f.type_instructions_md || '',
+      requirements: safeArray(f.type_requirements_json)
     };
 
-    if (fields !== undefined) out.fields = fields;
-    if (layout !== undefined) out.layout = layout;
-    if (base_image !== null) out.base_image = base_image;
+    const originalType = f.TYPE || '';
+    const kebabType = toKebab(originalType);
+
+    const out = {
+      template_id: f.template_id || '',
+      name: f.name || '',
+      TYPE: originalType,                 // keep original (as requested)
+      fields,
+      layout,
+      requires_photo: !!f.requires_photo || f.requires_photo === true,
+      requires_text:  !!f.requires_text  || f.requires_text  === true,
+      optional:        !!f.optional,
+      optional_photo:  !!f.optional_photo,
+      optional_text:   !!f.optional_text,
+      base_image: f.base_image || null,
+      typeMeta: meta
+    };
+
+    // Optional helpers based on query flags
+    if (wantKebabType) out.type = kebabType;      // e.g. "beer-mat-photo"
+    if (wantSlugObj)  out.slug = { type: kebabType };
 
     return out;
-  };
+  });
 
-  async function fetchAll() {
-    let url = `${base}?${params.toString()}`;
-    const out = [];
-    while (url) {
-      const r = await fetch(url, { headers });
-      if (!r.ok) throw new Error(`Airtable ${r.status}`);
-      const body = await r.json();
-      (body.records || []).forEach((rec) => out.push(mapLegacy(rec)));
-      url = body.offset ? `${base}?${params.toString()}&offset=${body.offset}` : "";
-    }
-    return out;
-  }
-
-  try {
-    const records = await fetchAll();
-    res.setHeader("cache-control", "s-maxage=300, stale-while-revalidate=60");
-    return res.status(200).json({ records });
-  } catch (e) {
-    return res.status(502).json({ error: e.message || "Upstream error" });
-  }
+  return res.status(200).json({ records });
 }
