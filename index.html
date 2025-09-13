@@ -64,8 +64,7 @@
     <div id="c-done" class="success" style="margin-top:10px;"></div>
   </div>
 
-  <!-- NOTE: module so we can lazy-load renderers -->
-  <script type="module">
+  <script>
   // ---- Params reader (query OR hash) ----
   function getParams() {
     const qs = new URLSearchParams(location.search);
@@ -134,12 +133,17 @@
 
   // ---- Determine effective 'required' based on optional flags ----
   function isFieldRequired(template, field) {
+    // Table-level optional flags
     const optAll   = !!template.optional;
     const optPhoto = !!template.optional_photo;
     const optText  = !!template.optional_text;
+
+    // If any applicable optional flag is true -> not required
     if (optAll) return false;
     if (field.type === 'image' && optPhoto) return false;
     if (field.type === 'text'  && optText)  return false;
+
+    // Otherwise fall back to field.required (default=false)
     return !!field.required;
   }
 
@@ -168,11 +172,10 @@
       } else if (field.type === 'image') {
         const id = `f_${field.key}`;
         wrap.innerHTML = `
-          <label>${field.label || ${'`'+ 'field.key' +'`'}}</label>
+          <label>${field.label || field.key}</label>
           <input id="${id}_url" type="url" placeholder="Paste image URL" value="${prefill?.[field.key]||''}" ${required ? 'required' : ''}>
           <input id="${id}_file" type="file"
                  accept="${(field.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
-          <button type="button" id="${id}_remove">Remove</button>
           ${required ? `<small>(required)</small>` : `<small>(optional)</small>`}
         `;
       } else {
@@ -252,23 +255,6 @@
       `<rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>`
     ];
 
-    // Build clipPaths for image boxes (unique per key) for hard-cropping
-    const clipDefs = [];
-    const usedClips = new Set();
-    for (const el of (layout.elements||[])) {
-      if (el.type === 'image') {
-        const box = {x:el.x||0,y:el.y||0,w:el.w||vbW,h:el.h||vbH};
-        const clipId = `clip_${el.key}`;
-        if (!usedClips.has(clipId)) {
-          usedClips.add(clipId);
-          clipDefs.push(
-            `<clipPath id="${clipId}"><rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"/></clipPath>`
-          );
-        }
-      }
-    }
-    if (clipDefs.length) parts.push(`<defs>${clipDefs.join('')}</defs>`);
-
     // base image
     if (baseUrl) {
       const s = await imgSize(baseUrl);
@@ -286,11 +272,10 @@
         const url = inputs[el.key]; if (!url) continue;
         const box = {x:el.x||0,y:el.y||0,w:el.w||vbW,h:el.h||vbH};
         const s = await imgSize(url);
-        if (s){
-          const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
-          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x+fit.x}" y="${box.y+fit.y}" width="${fit.w}" height="${fit.h}" clip-path="url(#clip_${el.key})" preserveAspectRatio="none"/>`);
+        if (s){ const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
+          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x+fit.x}" y="${box.y+fit.y}" width="${fit.w}" height="${fit.h}" preserveAspectRatio="none"/>`);
         } else {
-          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" clip-path="url(#clip_${el.key})" preserveAspectRatio="none"/>`);
+          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" preserveAspectRatio="none"/>`);
         }
       }
       if (el.type==='text'){
@@ -320,44 +305,8 @@
     mount.innerHTML = svg;
   }
 
-  // ---- TYPE Router helpers ----
-  const ROUTES = {
-    default: './renderers/default.js', // relative path for GitHub Pages
-    // candle: './renderers/candle.js',
-    // card: './renderers/card.js',
-  };
-
-  function pickType(tpl){
-    const t = (tpl?.TYPE ?? tpl?.type ?? tpl?.Type ?? '').toString().trim();
-    return t || 'default';
-  }
-
-  function buildFieldIndexFromTemplate(tpl){
-    const arr = Array.isArray(tpl?.fields) ? tpl.fields : [];
-    const byId = Object.create(null), byKey = Object.create(null), byLabel = Object.create(null);
-    for (const f of arr) {
-      if (!f) continue;
-      if (f.id) byId[f.id] = f;
-      if (f.key) byKey[f.key] = f;
-      if (f.label) byLabel[String(f.label).toLowerCase()] = f;
-    }
-    return { all: arr, byId, byKey, byLabel };
-  }
-
-  async function loadRendererByType(type){
-    const path = ROUTES[type] || ROUTES.default;
-    if (!path) return null;
-    try {
-      const mod = await import(path);
-      return mod?.default ?? mod;
-    } catch (e){
-      console.warn(`Renderer load failed for TYPE="${type}" -> ${path}. Using no-op.`, e);
-      return null;
-    }
-  }
-
   // ---- Workflow ----
-  async function startWorkflow(template, ctx) {
+  function startWorkflow(template, ctx) {
     document.getElementById('templates')?.classList.add('hidden');
     document.getElementById('simPanel')?.classList.add('hidden');
 
@@ -399,33 +348,6 @@
       document.getElementById('templates')?.classList.remove('hidden');
       document.getElementById('simPanel')?.classList.remove('hidden');
     };
-
-    // ---- TYPE routing (non-breaking) ----
-    const TYPE = pickType(template);
-    const fieldIndex = buildFieldIndexFromTemplate(template);
-    window.__APP__ = { type: TYPE, template, fieldIndex }; // debug/useful
-    const renderer = await loadRendererByType(TYPE);
-    if (renderer && typeof renderer.init === 'function') {
-      renderer.init({
-        type: TYPE,
-        template,
-        layout: template.layout,
-        fields: template.fields,
-        fieldIndex,
-        dom: {
-          form: document.getElementById('c-form'),
-          previewMount: document.getElementById('svgMount'),
-          errorsEl: document.getElementById('c-errors'),
-        },
-        utils: {
-          renderPreview,
-          safeUrl,
-          getVisibleFields,
-          isFieldRequired,
-          computeImageFit,
-        }
-      });
-    }
   }
 
   // ---- Boot from URL params ----
@@ -446,7 +368,7 @@
         if (f.type === "image" && photo) prefill[f.key] = photo;
       }
     }
-    await startWorkflow(tpl, { orderId, prefill });
+    startWorkflow(tpl, { orderId, prefill });
     return true;
   }
 
@@ -454,16 +376,8 @@
   (async function init() {
     const records = await renderList();
 
-    // Global: prevent Enter from submitting/refreshing
-    document.addEventListener('keydown', (e) => {
-      const t = e.target?.tagName;
-      if (e.key === 'Enter' && (t === 'INPUT' || t === 'TEXTAREA')) {
-        e.preventDefault(); e.stopPropagation();
-      }
-    }, true);
-
     // Simulator
-    document.getElementById("simBtn").addEventListener("click", async () => {
+    document.getElementById("simBtn").addEventListener("click", () => {
       const templateId = document.getElementById("simTpl").value.trim();
       const name = document.getElementById("simName").value.trim();
       const orderId = document.getElementById("simOrder").value.trim();
@@ -479,7 +393,7 @@
           if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
         }
       }
-      await startWorkflow(tpl, { orderId, prefill });
+      startWorkflow(tpl, { orderId, prefill });
     });
 
     // Auto-start if params present
