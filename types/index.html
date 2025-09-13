@@ -16,6 +16,9 @@
     a{color:#06c}
     #err{color:#b00020;margin-top:8px}
   </style>
+  .btn{display:inline-block;padding:8px 14px;border:1px solid #99c;background:#eef;border-radius:8px;text-decoration:none}
+.btn:hover{background:#e6eefc}
+
 </head>
 <body>
   <h1 id="title">Personalised <span class="badge" id="slugBadge"></span></h1>
@@ -31,8 +34,13 @@
   </div>
 
   <p class="meta" id="info"></p>
-  <p id="err" class="hidden"></p>
-  <p><a href="../index.html">← Back</a></p>
+<p id="err" class="hidden"></p>
+
+<!-- CTA: Open Designer -->
+<p><a id="startLink" class="btn">Open Designer</a></p>
+
+<p><a href="../index.html">← Back</a></p>
+
 
   <script>
     // ---------- helpers ----------
@@ -127,6 +135,19 @@
 
       const meta = rec?.typeMeta || null;
       renderMeta(slug, meta, qs);
+      // Build deep link to the main customiser (re-uses existing renderer)
+const startEl = document.getElementById('startLink');
+if (startEl) {
+  const u = new URL('../index.html', location.href);
+  if (rec?.template_id) u.searchParams.set('template_id', rec.template_id);
+  if (qs.get('orderId')) u.searchParams.set('orderId', qs.get('orderId'));
+  if (qs.get('name'))    u.searchParams.set('name', qs.get('name'));
+  if (qs.get('photo'))   u.searchParams.set('photo', qs.get('photo'));
+  u.searchParams.set('type', slug);
+  startEl.href = u.href;
+  startEl.textContent = rec?.name ? `Open Designer — ${rec.name}` : 'Open Designer';
+}
+
       if (!rec) showError('No template record matched this TYPE.');
       else if (!meta) showError('This TYPE has no meta yet. Add fields in Airtable: type_title, type_instructions_md, type_requirements_json.');
     })();
