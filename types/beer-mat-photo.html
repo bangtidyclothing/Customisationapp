@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Beer Mat Photo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>body{font-family:system-ui;margin:24px}</style>
+</head>
+<body>
+  <h1>Beer Mat (Photo)</h1>
+  <p id="info"></p>
+  <p><a href="../index.html">← Back</a></p>
+  <script>
+    const p = new URLSearchParams(location.search);
+    document.getElementById('info').textContent =
+      `TYPE=beer mat photo | template_id=${p.get('template_id')||''} | orderId=${p.get('orderId')||''} | name=${p.get('name')||''}`;
+  </script>
+</body>
+</html>
