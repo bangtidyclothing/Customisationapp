@@ -262,7 +262,7 @@
     }
 
     const parts = [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${cw}mm" height="${ch}mm" viewBox="0 0 ${vbW} ${vbH}">`,
+      `<svg xmlns="http://http://www.w3.org/2000/svg" width="${cw}mm" height="${ch}mm" viewBox="0 0 ${vbW} ${vbH}">`,
       `<rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>`
     ];
 
@@ -316,13 +316,33 @@
     mount.innerHTML = svg;
   }
 
+  // ---- Router skip helper ----
+  function hasNoRouteFlag(){
+    // query + hash flags
+    const qs = new URLSearchParams(location.search);
+    const h  = new URLSearchParams((location.hash || '').replace(/^#\??/, ''));
+    const val = (k) => (qs.get(k) || h.get(k) || '').toString().toLowerCase();
+    const flag = val('noroute') || val('router');
+    if (flag === '1' || flag === 'true' || flag === 'off') return true;
+
+    // one-shot flag from types page
+    try {
+      if (sessionStorage.getItem('skipRouterOnce') === '1') {
+        sessionStorage.removeItem('skipRouterOnce');
+        return true;
+      }
+    } catch {}
+
+    // if we came from a /types/ page, do not bounce back
+    if (document.referrer && /\/types\//.test(document.referrer)) return true;
+
+    return false;
+  }
+
   // ---- TYPE Router (dynamic) ----
   async function routeByType(template, extraParams = {}) {
-// NEW: allow types page to open the designer without bouncing back
-const noRouteFlag = String(qp('noroute') || qp('router') || '').toLowerCase();
-if (noRouteFlag === '1' || noRouteFlag === 'true' || noRouteFlag === 'off') {
-  return false; // skip routing
-}
+    // Skip routing if told to
+    if (hasNoRouteFlag()) return false;
 
     const raw = qp('type') || template?.TYPE || template?.type || '';
     const slug = toSlug(raw);
