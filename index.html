@@ -305,6 +305,45 @@
     mount.innerHTML = svg;
   }
 
+  // ---- TYPE Router (dynamic) ----
+  function toSlug(s){
+    return String(s || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  // Redirects to /types/<slug>.html if that file exists; otherwise stay here.
+  async function routeByType(template, extraParams = {}) {
+    const raw = template?.TYPE || template?.type || '';
+    const slug = toSlug(raw);
+    if (!slug) return false;
+
+    const dest = `types/${slug}.html`;
+
+    // prevent loop if already on destination
+    const path = location.pathname.replace(/^\//, '');
+    if (path.endsWith(dest)) return false;
+
+    // verify page exists before redirecting
+    try {
+      const res = await fetch(dest + '?check=1', { method: 'HEAD', cache: 'no-store' });
+      if (!res.ok) return false;
+    } catch {
+      return false;
+    }
+
+    // carry through params
+    const p = new URLSearchParams(location.search || (location.hash || '').replace(/^#/, ''));
+    if (template?.template_id) p.set('template_id', template.template_id);
+    for (const [k, v] of Object.entries(extraParams)) {
+      if (v != null && v !== '') p.set(k, v);
+    }
+    location.assign(`${dest}?${p.toString()}`);
+    return true;
+  }
+
   // ---- Workflow ----
   function startWorkflow(template, ctx) {
     document.getElementById('templates')?.classList.add('hidden');
@@ -368,6 +407,10 @@
         if (f.type === "image" && photo) prefill[f.key] = photo;
       }
     }
+
+    // ROUTER: redirect if a TYPE page exists
+    if (await routeByType(tpl, { orderId, name, photo })) return true;
+
     startWorkflow(tpl, { orderId, prefill });
     return true;
   }
@@ -377,7 +420,7 @@
     const records = await renderList();
 
     // Simulator
-    document.getElementById("simBtn").addEventListener("click", () => {
+    document.getElementById("simBtn").addEventListener("click", async () => {
       const templateId = document.getElementById("simTpl").value.trim();
       const name = document.getElementById("simName").value.trim();
       const orderId = document.getElementById("simOrder").value.trim();
@@ -393,6 +436,10 @@
           if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
         }
       }
+
+      // ROUTER: redirect if a TYPE page exists
+      if (await routeByType(tpl, { orderId, name, photo: safeUrl(photo) || '' })) return;
+
       startWorkflow(tpl, { orderId, prefill });
     });
 
