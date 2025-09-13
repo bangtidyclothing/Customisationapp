@@ -1,404 +1,130 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Customisation App</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    :root { --bd:#ddd; --muted:#666; --bg:#fafafa; --fg:#111; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color: var(--fg); }
-    h1 { margin: 0 0 12px; }
-    .card { margin-top: 1rem; padding: 12px; border: 1px solid var(--bd); border-radius: 12px; background: #fff; }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    button { padding: 9px 14px; border: 1px solid var(--bd); background: #fff; border-radius: 8px; cursor: pointer; }
-    input[type="text"], input[type="url"], input[type="file"] { padding: 9px 10px; border: 1px solid var(--bd); border-radius: 8px; min-width: 220px; }
-    label { display:block; font-weight: 600; margin-top: 10px; }
-    small { color: var(--muted); }
-    ul { padding-left: 18px; margin: 6px 0 0; }
-    #templates-status { margin-top:6px; color: var(--muted); }
-    .hidden { display: none !important; }
-    .error { color: #b00020; }
-    .success { color: #0f7b0f; }
-  </style>
-</head>
-<body>
-  <h1>Customisation App</h1>
-
-  <!-- Templates list -->
-  <div id="templates" class="card">
-    <strong>Templates</strong>
-    <div id="templates-status">Loading…</div>
-    <ul id="templates-list"></ul>
-  </div>
-
-  <!-- Simulator -->
-  <div class="card" id="simPanel">
-    <strong>Simulate Jotform</strong>
-    <div class="row" style="margin-top:8px;">
-      <input id="simTpl" placeholder="template_id (e.g. tpl-co-card-ra816)" />
-      <input id="simName" placeholder="name" />
-      <input id="simOrder" placeholder="orderId" />
-      <input id="simPhoto" placeholder="photo URL (optional)" />
-      <button id="simBtn">Start</button>
-    </div>
-    <div style="margin-top:8px; color: var(--muted); font-size: 12px;">
-      Tip: copy a template_id from the list above, enter name/orderId, and click Start.
-    </div>
-  </div>
-
-  <!-- Customiser -->
-  <div id="customiser" class="card hidden">
-    <div id="c-head"><strong id="c-title"></strong></div>
-    <form id="c-form" style="margin-top:8px;"></form>
-
-    <div id="c-preview" style="margin-top:10px;">
-      <div style="margin-bottom:6px;"><strong>Preview</strong></div>
-      <div id="svgMount" style="border:1px solid #ddd; border-radius:8px; overflow:hidden;"></div>
-    </div>
-
-    <div id="c-errors" class="error" style="margin-top:8px;"></div>
-    <div class="row" style="margin-top:10px;">
-      <button id="c-submit" type="button">Continue</button>
-      <button id="c-cancel" type="button">Cancel</button>
-    </div>
-    <div id="c-done" class="success" style="margin-top:10px;"></div>
-  </div>
-
-  <script>
-  // ---- Params reader (query OR hash) ----
-  function getParams() {
-    const qs = new URLSearchParams(location.search);
-    if (qs.toString()) return qs;
-    const h = (location.hash || "").replace(/^#/, "");
-    return new URLSearchParams(h);
-  }
-  function qp(k){ return getParams().get(k) || ""; }
-
-  // ---- API loader ----
-  async function loadTemplates() {
-    const PROXY_URL = "https://customisationapp-new.vercel.app/api/templates?slug=1&type=kebab";
-    const res = await fetch(PROXY_URL, { credentials: "omit", cache: "no-store" });
-    if (!res.ok) { console.error("Template fetch failed", res.status); return []; }
-    const data = await res.json();
-    return Array.isArray(data.records) ? data.records : [];
-  }
-
-  // ---- Safe URL ----
-  function safeUrl(u){ try { const url = new URL(u); return url.href; } catch { return ""; } }
-
-  // ---- Render list ----
-  async function renderList() {
-    const listEl = document.getElementById("templates-list");
-    const statusEl = document.getElementById("templates-status");
-    const records = await loadTemplates();
-
-    if (!records.length) { statusEl.textContent = "No templates found"; return records; }
-    statusEl.remove();
-
-    const frag = document.createDocumentFragment();
-    records.forEach(t => {
-      const li = document.createElement("li");
-      li.textContent = `${t.template_id} — ${t.name ?? ""}`;
-      frag.appendChild(li);
-    });
-    listEl.appendChild(frag);
-    return records;
-  }
-
-  // ---- Field filtering using table-level flags ----
-  function getVisibleFields(template) {
-    const layoutKeys = new Set((template.layout?.elements || []).map(e => e.key).filter(Boolean));
-
-    // Defaults: visible unless explicitly turned off
-    const wantsPhoto = template.requires_photo !== false;
-    const wantsText  = template.requires_text  !== false;
-
-    let fields = Array.isArray(template.fields) ? template.fields : [];
-
-    // If layout exists, only keep fields referenced in layout
-    if (layoutKeys.size) fields = fields.filter(f => layoutKeys.has(f.key));
-
-    // Hide by requires_* flags
-    fields = fields.filter(f => {
-      if (f.type === 'image' && !wantsPhoto) return false;
-      if (f.type === 'text'  && !wantsText)  return false;
-      return true;
-    });
-
-    // Respect per-field overrides from fields_json
-    fields = fields.filter(f => f.hidden !== true && f.editable !== false);
-
-    return fields;
-  }
-
-  // ---- Determine effective 'required' based on optional flags ----
-  function isFieldRequired(template, field) {
-    // Table-level optional flags
-    const optAll   = !!template.optional;
-    const optPhoto = !!template.optional_photo;
-    const optText  = !!template.optional_text;
-
-    // If any applicable optional flag is true -> not required
-    if (optAll) return false;
-    if (field.type === 'image' && optPhoto) return false;
-    if (field.type === 'text'  && optText)  return false;
-
-    // Otherwise fall back to field.required (default=false)
-    return !!field.required;
-  }
-
-  // ---- Generic builder ----
-  function buildForm(template, prefill) {
-    const form = document.getElementById('c-form');
-    form.innerHTML = "";
-
-    const fields = getVisibleFields(template);
-
-    fields.forEach(field => {
-      const wrap = document.createElement('div');
-      const required = isFieldRequired(template, field);
-
-      if (field.type === 'text') {
-        const id = `f_${field.key}`;
-        wrap.innerHTML = `
-          <label for="${id}">${field.label || field.key}</label>
-          <input id="${id}" name="${field.key}" type="text"
-                 ${field.maxLength ? `maxlength="${field.maxLength}"`:''}
-                 ${required ? 'required' : ''}
-                 value="${(prefill?.[field.key]||'').replace(/"/g,'&quot;')}">
-          ${field.maxLength ? `<small>Max ${field.maxLength} characters</small>` : ''}
-          ${required ? `<small>(required)</small>` : `<small>(optional)</small>`}
-        `;
-      } else if (field.type === 'image') {
-        const id = `f_${field.key}`;
-        wrap.innerHTML = `
-          <label>${field.label || field.key}</label>
-          <input id="${id}_url" type="url" placeholder="Paste image URL" value="${prefill?.[field.key]||''}" ${required ? 'required' : ''}>
-          <input id="${id}_file" type="file"
-                 accept="${(field.constraints?.formats||['jpg','jpeg','png']).map(x=>'.'+x).join(',')}">
-          ${required ? `<small>(required)</small>` : `<small>(optional)</small>`}
-        `;
-      } else {
-        wrap.innerHTML = `<label>${field.label || field.key} (unsupported)</label>`;
-      }
-      form.appendChild(wrap);
-    });
-  }
-
-  // ---- Collect form ----
-  async function collectForm(template) {
-    const out = {};
-    const errs = [];
-    const fields = getVisibleFields(template);
-
-    for (const field of fields) {
-      const required = isFieldRequired(template, field);
-
-      if (field.type === 'text') {
-        const el = document.getElementById(`f_${field.key}`);
-        const val = (el?.value || "").trim();
-        if (required && !val) errs.push(`${field.label||field.key} is required`);
-        out[field.key] = val;
-      }
-      if (field.type === 'image') {
-        const urlEl = document.getElementById(`f_${field.key}_url`);
-        const fileEl = document.getElementById(`f_${field.key}_file`);
-        let val = (urlEl?.value || "").trim();
-        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder until upload
-        if (required && !val) errs.push(`${field.label||field.key} is required`);
-        out[field.key] = val;
-      }
-    }
-    return { out, errs };
-  }
-
-  // ---- Map form inputs to layout keys (handles key mismatches) ----
-  function normalizeInputsForLayout(layout, inputs, fields){
-    const out = { ...inputs };
-    const textKeys  = (fields || []).filter(f => f.type === 'text').map(f => f.key);
-    const imageKeys = (fields || []).filter(f => f.type === 'image').map(f => f.key);
-    (layout?.elements || []).forEach(el => {
-      if (el.type === 'text' && !out[el.key]) {
-        if (textKeys.length === 1) out[el.key] = inputs[textKeys[0]] || '';
-      }
-      if (el.type === 'image' && !out[el.key]) {
-        if (imageKeys.length === 1) out[el.key] = inputs[imageKeys[0]] || '';
-      }
-    });
-    return out;
-  }
-
-  // ---- SVG composer (with base image + text fill support) ----
-  function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
-    const rImg = imgW / imgH, rBox = boxW / boxH;
-    let w,h; if (mode==='cover'){ if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; } }
-    else { if (rImg>rBox){ w=boxW; h=w/rImg; } else { h=boxH; w=h*rImg; } }
-    return { x:(boxW-w)/2, y:(boxH-h)/2, w, h };
-  }
-
-  async function composeSVG(layout, inputs, baseUrl){
-    if (!layout) return '';
-    const [cw, ch] = layout.canvasMM || [100,100];
-    const vbW = cw, vbH = ch;
-
-    const imgInfo = {};
-    async function imgSize(url){
-      if (!url) return null;
-      if (imgInfo[url]) return imgInfo[url];
-      const img = new Image(); img.crossOrigin='anonymous';
-      const p = new Promise(r=>{ img.onload=()=>r({w:img.naturalWidth,h:img.naturalHeight}); img.onerror=()=>r(null); });
-      img.src = url; const s = await p; imgInfo[url]=s; return s;
-    }
-
-    const parts = [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${cw}mm" height="${ch}mm" viewBox="0 0 ${vbW} ${vbH}">`,
-      `<rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>`
-    ];
-
-    // base image
-    if (baseUrl) {
-      const s = await imgSize(baseUrl);
-      if (s) {
-        const fit = computeImageFit(s.w, s.h, vbW, vbH, 'contain');
-        parts.push(`<image href="${baseUrl.replace(/"/g,'&quot;')}" x="${fit.x}" y="${fit.y}" width="${fit.w}" height="${fit.h}" preserveAspectRatio="none"/>`);
-      } else {
-        parts.push(`<image href="${baseUrl.replace(/"/g,'&quot;')}" x="0" y="0" width="${vbW}" height="${vbH}" preserveAspectRatio="none"/>`);
-      }
-    }
-
-    // elements
-    for (const el of (layout.elements||[])){
-      if (el.type==='image'){
-        const url = inputs[el.key]; if (!url) continue;
-        const box = {x:el.x||0,y:el.y||0,w:el.w||vbW,h:el.h||vbH};
-        const s = await imgSize(url);
-        if (s){ const fit = computeImageFit(s.w,s.h,box.w,box.h,el.fit||'cover');
-          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x+fit.x}" y="${box.y+fit.y}" width="${fit.w}" height="${fit.h}" preserveAspectRatio="none"/>`);
-        } else {
-          parts.push(`<image href="${url.replace(/"/g,'&quot;')}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" preserveAspectRatio="none"/>`);
-        }
-      }
-      if (el.type==='text'){
-        const val = (inputs[el.key]||'')+''; if (!val) continue;
-        const x=el.x||0, y=el.y||0, w=el.w||vbW, align=el.align||'left';
-        const sizePt = el.sizePt||14, font = el.font||'Arial, sans-serif';
-        const fill = el.fill || '#000';
-        const anchor = align==='center'?'middle':(align==='right'?'end':'start');
-        const tx = align==='center'? x+w/2 : (align==='right'? x+w : x);
-        parts.push(`<text x="${tx}" y="${y}" font-family="${font}" font-size="${sizePt}pt" fill="${fill}" text-anchor="${anchor}" dominant-baseline="hanging">`+
-                   `${val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</text>`);
-      }
-    }
-
-    parts.push(`</svg>`);
-    return parts.join('');
-  }
-
-  async function renderPreview(template, inputs){
-    const mount = document.getElementById('svgMount');
-    if (!template?.layout){ mount.innerHTML = '<small style="color:#666">No layout on this template.</small>'; return; }
-
-    const baseUrl = (template.layout && template.layout.baseImage) || template.base_image || null;
-    const visible = getVisibleFields(template);
-    const aligned = normalizeInputsForLayout(template.layout, inputs, visible);
-    const svg = await composeSVG(template.layout, aligned, baseUrl);
-    mount.innerHTML = svg;
-  }
-
-  // ---- Workflow ----
-  function startWorkflow(template, ctx) {
-    document.getElementById('templates')?.classList.add('hidden');
-    document.getElementById('simPanel')?.classList.add('hidden');
-
-    const wrap = document.getElementById('customiser');
-    wrap.classList.remove('hidden');
-    document.getElementById('c-title').textContent = `${template.template_id} — ${template.name||''}`;
-    document.getElementById('c-errors').textContent = '';
-    document.getElementById('c-done').textContent = '';
-
-    buildForm(template, ctx.prefill);
-
-    // initial preview
-    renderPreview(template, { ...ctx.prefill, template_id: template.template_id });
-
-    // re-render on input changes
-    document.getElementById('c-form').addEventListener('input', () => {
-      const current = {};
-      const visible = getVisibleFields(template);
-      visible.forEach(f => {
-        if (f.type === 'text') {
-          const el = document.getElementById(`f_${f.key}`);
-          current[f.key] = (el?.value || '').trim();
-        }
-        if (f.type === 'image') {
-          const urlEl = document.getElementById(`f_${f.key}_url`);
-          current[f.key] = (urlEl?.value || '').trim();
-        }
-      });
-      renderPreview(template, { ...current, template_id: template.template_id });
-    });
-
-    document.getElementById('c-submit').onclick = async () => {
-      const { out, errs } = await collectForm(template);
-      if (errs.length) { document.getElementById('c-errors').textContent = errs.join(' • '); return; }
-      document.getElementById('c-done').textContent = 'All good — ready to generate!';
-    };
-    document.getElementById('c-cancel').onclick = () => {
-      wrap.classList.add('hidden');
-      document.getElementById('templates')?.classList.remove('hidden');
-      document.getElementById('simPanel')?.classList.remove('hidden');
-    };
-  }
-
-  // ---- Boot from URL params ----
-  async function bootFromJotform(records) {
-    const templateId = qp("template_id");
-    const orderId    = qp("orderId");
-    const name       = qp("name");
-    const photo      = safeUrl(qp("photo"));
-    if (!templateId) return false;
-
-    const tpl = (records||[]).find(t => (t.template_id||"").toLowerCase() === templateId.toLowerCase());
-    if (!tpl) return false;
-
-    const prefill = {};
-    if (Array.isArray(tpl.fields)) {
-      for (const f of tpl.fields) {
-        if (f.type === "text")  prefill[f.key]  = name || prefill[f.key] || "";
-        if (f.type === "image" && photo) prefill[f.key] = photo;
-      }
-    }
-    startWorkflow(tpl, { orderId, prefill });
-    return true;
-  }
-
-  // ---- Init ----
-  (async function init() {
-    const records = await renderList();
-
-    // Simulator
-    document.getElementById("simBtn").addEventListener("click", () => {
-      const templateId = document.getElementById("simTpl").value.trim();
-      const name = document.getElementById("simName").value.trim();
-      const orderId = document.getElementById("simOrder").value.trim();
-      const photo = document.getElementById("simPhoto").value.trim();
-
-      const tpl = records.find(t => (t.template_id||"").toLowerCase() === templateId.toLowerCase());
-      if (!tpl) { alert("Template not found."); return; }
-
-      const prefill = {};
-      if (Array.isArray(tpl.fields)) {
-        for (const f of tpl.fields) {
-          if (f.type === 'text')  prefill[f.key] = name || "";
-          if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
-        }
-      }
-      startWorkflow(tpl, { orderId, prefill });
-    });
-
-    // Auto-start if params present
-    await bootFromJotform(records);
-  })();
-  </script>
-</body>
-</html>
+*** Begin Patch
+*** Update File: index.html
+@@
+-  <script>
++  <script type="module">
+@@
+-  // ---- Workflow ----
+-  function startWorkflow(template, ctx) {
++  // ---- TYPE Router (minimal, lazy) ----
++  const ROUTES = {
++    // use relative paths so it works on GitHub Pages subpaths
++    default: './renderers/default.js',
++    // add more as you create them:
++    // candle: './renderers/candle.js',
++    // card: './renderers/card.js',
++  };
++
++  function pickType(tpl){
++    const t = (tpl?.TYPE ?? tpl?.type ?? tpl?.Type ?? '').toString().trim();
++    return t || 'default';
++  }
++
++  function buildFieldIndexFromTemplate(tpl){
++    const arr = Array.isArray(tpl?.fields) ? tpl.fields : [];
++    const byId = Object.create(null), byKey = Object.create(null), byLabel = Object.create(null);
++    for (const f of arr) {
++      if (!f) continue;
++      if (f.id) byId[f.id] = f;
++      if (f.key) byKey[f.key] = f;
++      if (f.label) byLabel[String(f.label).toLowerCase()] = f;
++    }
++    return { all: arr, byId, byKey, byLabel };
++  }
++
++  async function loadRendererByType(type){
++    const path = ROUTES[type] || ROUTES.default;
++    if (!path) return null;
++    try {
++      const mod = await import(path);
++      return mod?.default ?? mod;
++    } catch (e){
++      console.warn(`Renderer load failed for TYPE="${type}" -> ${path}. Using no-op.`, e);
++      return null;
++    }
++  }
++
++  // ---- Workflow ----
++  async function startWorkflow(template, ctx) {
+     document.getElementById('templates')?.classList.add('hidden');
+     document.getElementById('simPanel')?.classList.add('hidden');
+ 
+     const wrap = document.getElementById('customiser');
+     wrap.classList.remove('hidden');
+@@
+-    buildForm(template, ctx.prefill);
++    buildForm(template, ctx.prefill);
+ 
+     // initial preview
+     renderPreview(template, { ...ctx.prefill, template_id: template.template_id });
+ 
+     // re-render on input changes
+@@
+       document.getElementById('c-done').textContent = 'All good — ready to generate!';
+     };
+     document.getElementById('c-cancel').onclick = () => {
+       wrap.classList.add('hidden');
+       document.getElementById('templates')?.classList.remove('hidden');
+       document.getElementById('simPanel')?.classList.remove('hidden');
+     };
++
++    // ---- TYPE routing (non-breaking) ----
++    const TYPE = pickType(template);
++    const fieldIndex = buildFieldIndexFromTemplate(template);
++    // expose for quick debugging / future modules
++    window.__APP__ = { type: TYPE, template, fieldIndex };
++
++    const renderer = await loadRendererByType(TYPE);
++    if (renderer && typeof renderer.init === 'function') {
++      // Pass a compact context; expand as needed later
++      renderer.init({
++        type: TYPE,
++        template,
++        layout: template.layout,
++        fields: template.fields,
++        fieldIndex,
++        // handy DOM refs
++        dom: {
++          form: document.getElementById('c-form'),
++          previewMount: document.getElementById('svgMount'),
++          errorsEl: document.getElementById('c-errors'),
++        },
++        // small util surface
++        utils: {
++          renderPreview,
++          safeUrl,
++          getVisibleFields,
++          isFieldRequired,
++          computeImageFit,
++        }
++      });
++    }
+   }
+@@
+-    document.getElementById("simBtn").addEventListener("click", () => {
++    document.getElementById("simBtn").addEventListener("click", async () => {
+       const templateId = document.getElementById("simTpl").value.trim();
+       const name = document.getElementById("simName").value.trim();
+       const orderId = document.getElementById("simOrder").value.trim();
+       const photo = document.getElementById("simPhoto").value.trim();
+ 
+       const tpl = records.find(t => (t.template_id||"").toLowerCase() === templateId.toLowerCase());
+       if (!tpl) { alert("Template not found."); return; }
+ 
+       const prefill = {};
+       if (Array.isArray(tpl.fields)) {
+         for (const f of tpl.fields) {
+           if (f.type === 'text')  prefill[f.key] = name || "";
+           if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
+         }
+       }
+-      startWorkflow(tpl, { orderId, prefill });
++      await startWorkflow(tpl, { orderId, prefill });
+     });
+ 
+     // Auto-start if params present
+-    await bootFromJotform(records);
++    await bootFromJotform(records);
+   })();
+   </script>
+*** End Patch
