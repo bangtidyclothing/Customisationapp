@@ -75,36 +75,32 @@
   }
   function qp(k){ return getParams().get(k) || ""; }
 
-  // ---- API base (with override via ?api= for debugging) ----
+  // ---- API base (override via ?api= for debugging) ----
   const API_BASE = (() => {
     const override = qp('api');
     return override || "https://customisationapp-new.vercel.app/api/templates";
   })();
 
-  // ---- API loader (robust, with timeout + human-readable errors) ----
+  // ---- API loader (timeout + visible errors) ----
   async function loadTemplates() {
     const url = new URL(API_BASE);
-    url.searchParams.set('slug', '1');   // include slug fields
-    url.searchParams.set('type', 'kebab'); // include kebab-case .type
+    url.searchParams.set('slug', '1');
+    url.searchParams.set('type', 'kebab');
 
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 12000); // 12s timeout
+    const t = setTimeout(() => controller.abort(), 12000);
 
     try {
       const res = await fetch(url.href, { credentials: "omit", cache: "no-store", signal: controller.signal });
       const text = await res.text();
       let data;
       try { data = text ? JSON.parse(text) : {}; }
-      catch (e) {
-        throw new Error(`API returned non-JSON. First 200 chars:\n${text.slice(0,200)}`);
-      }
+      catch (e) { throw new Error(`API returned non-JSON. First 200 chars:\n${text.slice(0,200)}`); }
       if (!res.ok) {
         const msg = data?.error || res.statusText || 'HTTP error';
         throw new Error(`HTTP ${res.status}: ${msg}`);
       }
-      if (!Array.isArray(data.records)) {
-        throw new Error(`No "records" in response.`);
-      }
+      if (!Array.isArray(data.records)) throw new Error(`No "records" in response.`);
       return data.records.map(normalizeRecord).filter(r => r.template_id);
     } catch (err) {
       err.apiUrl = url.href;
@@ -121,7 +117,6 @@
   function clean(s){ return String(s||'').replace(/\s+/g,' ').trim(); }
   function toSlug(s){ return clean(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
   function parseTemplateId(input){
-    // grab first id-like token (letters/numbers/_/-), ignore long pasted lines
     const s = String(input||'').trim();
     const m = s.match(/[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*/);
     return m ? m[0] : clean(s);
@@ -132,11 +127,19 @@
     const TYPE = clean(t.TYPE || t.type || '');
     const typeKebab = t.type ? clean(t.type) : toSlug(TYPE);
     let base = t.base_image;
-    if (Array.isArray(base) && base[0]?.url) base = base[0].url; // Airtable attachment -> URL
+    if (Array.isArray(base) && base[0]?.url) base = base[0].url;
     return { ...t, template_id:id, name, TYPE, type:typeKebab, base_image: base || null };
   }
+  // NEW: key/type helpers
+  function keyLower(s){ return String(s||'').trim().toLowerCase(); }
+  function normType(t){
+    const x = String(t||'').toLowerCase();
+    if (['image','photo','img','picture','pic'].includes(x)) return 'image';
+    if (['text','textbox','string'].includes(x)) return 'text';
+    return x;
+  }
 
-  // ---- Render list (shows helpful error UI) ----
+  // ---- Render list (with error UI) ----
   async function renderList() {
     const listEl = document.getElementById("templates-list");
     const statusEl = document.getElementById("templates-status");
@@ -167,18 +170,24 @@
     }
   }
 
-  // ---- Field filtering using table-level flags ----
+  // ---- Field filtering (case-insensitive keys, normalised types) ----
   function getVisibleFields(template) {
-    const layoutKeys = new Set((template.layout?.elements || []).map(e => e.key).filter(Boolean));
+    const els = (template.layout?.elements || []);
+    const layoutKeysLower = new Set(els.map(e => keyLower(e.key)).filter(Boolean));
+
     const wantsPhoto = template.requires_photo !== false;
     const wantsText  = template.requires_text  !== false;
 
     let fields = Array.isArray(template.fields) ? template.fields : [];
-    if (layoutKeys.size) fields = fields.filter(f => layoutKeys.has(f.key));
+
+    if (layoutKeysLower.size) {
+      fields = fields.filter(f => layoutKeysLower.has(keyLower(f.key)));
+    }
 
     fields = fields.filter(f => {
-      if (f.type === 'image' && !wantsPhoto) return false;
-      if (f.type === 'text'  && !wantsText)  return false;
+      const t = normType(f.type);
+      if (t === 'image' && !wantsPhoto) return false;
+      if (t === 'text'  && !wantsText)  return false;
       return true;
     });
 
@@ -186,18 +195,18 @@
     return fields;
   }
 
-  // ---- Determine effective 'required' based on optional flags ----
+  // ---- Determine effective 'required' ----
   function isFieldRequired(template, field) {
     const optAll   = !!template.optional;
     const optPhoto = !!template.optional_photo;
     const optText  = !!template.optional_text;
     if (optAll) return false;
-    if (field.type === 'image' && optPhoto) return false;
-    if (field.type === 'text'  && optText)  return false;
+    if (normType(field.type) === 'image' && optPhoto) return false;
+    if (normType(field.type) === 'text'  && optText)  return false;
     return !!field.required;
   }
 
-  // ---- Generic builder ----
+  // ---- Generic builder (uses normType) ----
   function buildForm(template, prefill) {
     const form = document.getElementById('c-form');
     form.innerHTML = "";
@@ -205,10 +214,11 @@
     const fields = getVisibleFields(template);
 
     fields.forEach(field => {
+      const t = normType(field.type);
       const wrap = document.createElement('div');
       const required = isFieldRequired(template, field);
 
-      if (field.type === 'text') {
+      if (t === 'text') {
         const id = `f_${field.key}`;
         wrap.innerHTML = `
           <label for="${id}">${field.label || field.key}</label>
@@ -219,7 +229,7 @@
           ${field.maxLength ? `<small>Max ${field.maxLength} characters</small>` : ''}
           ${required ? `<small>(required)</small>` : `<small>(optional)</small>`}
         `;
-      } else if (field.type === 'image') {
+      } else if (t === 'image') {
         const id = `f_${field.key}`;
         wrap.innerHTML = `
           <label>${field.label || field.key}</label>
@@ -235,7 +245,7 @@
     });
   }
 
-  // ---- Collect form ----
+  // ---- Collect form (uses normType) ----
   async function collectForm(template) {
     const out = {};
     const errs = [];
@@ -243,18 +253,18 @@
 
     for (const field of fields) {
       const required = isFieldRequired(template, field);
+      const t = normType(field.type);
 
-      if (field.type === 'text') {
+      if (t === 'text') {
         const el = document.getElementById(`f_${field.key}`);
         const val = (el?.value || "").trim();
         if (required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
-      }
-      if (field.type === 'image') {
+      } else if (t === 'image') {
         const urlEl = document.getElementById(`f_${field.key}_url`);
         const fileEl = document.getElementById(`f_${field.key}_file`);
         let val = (urlEl?.value || "").trim();
-        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder until upload
+        if (!val && fileEl?.files?.[0]) val = fileEl.files[0].name; // placeholder
         if (required && !val) errs.push(`${field.label||field.key} is required`);
         out[field.key] = val;
       }
@@ -262,23 +272,35 @@
     return { out, errs };
   }
 
-  // ---- Map form inputs to layout keys (handles key mismatches) ----
+  // ---- Map inputs to layout keys (case-insensitive) ----
   function normalizeInputsForLayout(layout, inputs, fields){
     const out = { ...inputs };
-    const textKeys  = (fields || []).filter(f => f.type === 'text').map(f => f.key);
-    const imageKeys = (fields || []).filter(f => f.type === 'image').map(f => f.key);
+    const byLower = new Map((fields || []).map(f => [keyLower(f.key), f.key]));
+
     (layout?.elements || []).forEach(el => {
-      if (el.type === 'text' && !out[el.key]) {
-        if (textKeys.length === 1) out[el.key] = inputs[textKeys[0]] || '';
-      }
-      if (el.type === 'image' && !out[el.key]) {
-        if (imageKeys.length === 1) out[el.key] = inputs[imageKeys[0]] || '';
+      const lk = keyLower(el.key);
+      if (out[el.key]) return;
+      const mappedKey = byLower.get(lk);
+      if (mappedKey && out[mappedKey] != null && out[mappedKey] !== '') {
+        out[el.key] = out[mappedKey];
+        return;
       }
     });
+
+    // Single-key fallbacks
+    const textKeys  = (fields || []).filter(f => normType(f.type) === 'text').map(f => f.key);
+    const imageKeys = (fields || []).filter(f => normType(f.type) === 'image').map(f => f.key);
+
+    (layout?.elements || []).forEach(el => {
+      if (out[el.key]) return;
+      if (el.type === 'text' && textKeys.length === 1) out[el.key] = inputs[textKeys[0]] || '';
+      if (el.type === 'image' && imageKeys.length === 1) out[el.key] = inputs[imageKeys[0]] || '';
+    });
+
     return out;
   }
 
-  // ---- SVG composer (with base image + text fill support) ----
+  // ---- SVG composer (unchanged behaviour) ----
   function computeImageFit(imgW, imgH, boxW, boxH, mode='cover'){
     const rImg = imgW / imgH, rBox = boxW / boxH;
     let w,h; if (mode==='cover'){ if (rImg>rBox){ h=boxH; w=h*rImg; } else { w=boxW; h=w/rImg; } }
@@ -357,44 +379,33 @@
 
   // ---- Router skip helper ----
   function hasNoRouteFlag(){
-    // query + hash flags
     const qs = new URLSearchParams(location.search);
     const h  = new URLSearchParams((location.hash || '').replace(/^#\??/, ''));
     const val = (k) => (qs.get(k) || h.get(k) || '').toString().toLowerCase();
     const flag = val('noroute') || val('router');
     if (flag === '1' || flag === 'true' || flag === 'off') return true;
-
-    // one-shot flag from types page
     try {
       if (sessionStorage.getItem('skipRouterOnce') === '1') {
         sessionStorage.removeItem('skipRouterOnce');
         return true;
       }
     } catch {}
-
-    // if we came from a /types/ page, do not bounce back
     if (document.referrer && /\/types\//.test(document.referrer)) return true;
-
     return false;
   }
 
   // ---- TYPE Router (dynamic) ----
   async function routeByType(template, extraParams = {}) {
-    // Skip routing if told to
     if (hasNoRouteFlag()) return false;
 
     const raw = qp('type') || template?.TYPE || template?.type || '';
     const slug = toSlug(raw);
     if (!slug) return false;
 
-    // Generic types page + hash slug avoids per-file creation
     const dest = `types/index.html#/${slug}`;
-
-    // prevent loop if already there
     const path = location.pathname.replace(/^\//, '');
     if (path.endsWith('types/index.html') && location.hash.replace(/^#\/?/, '') === slug) return false;
 
-    // carry through params
     const p = new URLSearchParams(location.search || (location.hash || '').replace(/^#/, ''));
     if (template?.template_id) p.set('template_id', template.template_id);
     for (const [k, v] of Object.entries(extraParams)) {
@@ -405,7 +416,7 @@
     return true;
   }
 
-  // ---- Local image preview state (for future photo upload step) ----
+  // ---- Local image preview state ----
   const localImages = new Map();
   function clearLocalImages(){
     for (const v of localImages.values()) { try { URL.revokeObjectURL(v.objectUrl); } catch{} }
@@ -415,15 +426,13 @@
     const out = { template_id: template?.template_id || '' };
     const visible = getVisibleFields(template);
     visible.forEach(f => {
-      if (f.type === 'text') {
+      const t = normType(f.type);
+      if (t === 'text') {
         out[f.key] = (document.getElementById(`f_${f.key}`)?.value || '').trim();
-      } else if (f.type === 'image') {
+      } else if (t === 'image') {
         const local = localImages.get(f.key);
-        if (local?.objectUrl) {
-          out[f.key] = local.objectUrl;
-        } else {
-          out[f.key] = (document.getElementById(`f_${f.key}_url`)?.value || '').trim();
-        }
+        if (local?.objectUrl) out[f.key] = local.objectUrl;
+        else out[f.key] = (document.getElementById(`f_${f.key}_url`)?.value || '').trim();
       }
     });
     return out;
@@ -452,7 +461,7 @@
       renderPreview(template, currentInputsForPreview(template));
     });
 
-    // file → objectURL → preview (delegated listener)
+    // file → objectURL → preview
     formEl.addEventListener('change', (e) => {
       const t = e.target;
       if (!t || t.type !== 'file' || !t.id) return;
@@ -460,16 +469,13 @@
       if (!m) return;
       const key = m[1];
 
-      // revoke previous
       const prev = localImages.get(key);
       if (prev?.objectUrl) { try { URL.revokeObjectURL(prev.objectUrl); } catch{} }
 
-      // set new (or clear)
       const file = t.files && t.files[0];
       if (file) {
         const objectUrl = URL.createObjectURL(file);
         localImages.set(key, { objectUrl });
-        // optionally hint in the URL box
         const urlEl = document.getElementById(`f_${key}_url`);
         if (urlEl) { urlEl.value = ''; urlEl.placeholder = file.name; }
       } else {
@@ -498,30 +504,27 @@
     const name       = qp("name");
     const photo      = safeUrl(qp("photo"));
 
-    // If no template signal at all, don't auto-start or route
     const typeSlugFromQuery = toSlug(qp('type'));
     if (!templateId && !typeSlugFromQuery) return false;
 
-    // find record by template_id or by type slug
     let tpl = null;
     if (templateId) {
       const wanted = templateId.toLowerCase();
       tpl = records.find(t => (t.template_id||"").toLowerCase() === wanted) || null;
     }
     if (!tpl && typeSlugFromQuery) {
-      tpl = records.find(t => (t.type || toSlug(t.TYPE || '')) === typeSlugFromQuery) || null;
+      tpl = records.find(t => (t.type || toSlug(t.TYPE || '')).toLowerCase() === typeSlugFromQuery) || null;
     }
     if (!tpl) return false;
 
     const prefill = {};
     if (Array.isArray(tpl.fields)) {
       for (const f of tpl.fields) {
-        if (f.type === "text")  prefill[f.key]  = name || prefill[f.key] || "";
-        if (f.type === "image" && photo) prefill[f.key] = photo;
+        if (normType(f.type) === "text")  prefill[f.key]  = name || prefill[f.key] || "";
+        if (normType(f.type) === "image" && photo) prefill[f.key] = photo;
       }
     }
 
-    // Hard skip routing if any skip flag is present
     if (hasNoRouteFlag()) {
       startWorkflow(tpl, { orderId, prefill });
       return true;
@@ -536,7 +539,6 @@
   (async function init() {
     const records = await renderList();
 
-    // Build indexes for robust lookup
     const byId   = new Map();
     const byType = new Map();
     records.forEach(r => {
@@ -545,7 +547,6 @@
       if (slug) byType.set(slug, r);
     });
 
-    // Click a row to auto-fill simTpl with the clean template_id
     document.getElementById("templates-list").addEventListener("click", (e) => {
       const li = e.target.closest("li");
       if (!li) return;
@@ -554,7 +555,6 @@
       if (id && box) box.value = id;
     });
 
-    // Simulator (robust lookup by ID, fallback to TYPE)
     document.getElementById("simBtn").addEventListener("click", async () => {
       const rawTpl  = document.getElementById("simTpl").value;
       const templateId = parseTemplateId(rawTpl).toLowerCase();
@@ -577,12 +577,11 @@
       const prefill = {};
       if (Array.isArray(tpl.fields)) {
         for (const f of tpl.fields) {
-          if (f.type === 'text')  prefill[f.key] = name || "";
-          if (f.type === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
+          if (normType(f.type) === 'text')  prefill[f.key] = name || "";
+          if (normType(f.type) === 'image' && photo) prefill[f.key] = safeUrl(photo) || "";
         }
       }
 
-      // If skip flags exist, don't route—render here
       if (hasNoRouteFlag()) {
         startWorkflow(tpl, { orderId, prefill });
         return;
@@ -592,7 +591,6 @@
       startWorkflow(tpl, { orderId, prefill });
     });
 
-    // Auto-start if params present
     await bootFromJotform(records);
   })();
   </script>
