@@ -11,29 +11,23 @@ export default async function handler(req, res) {
 
   const { AIRTABLE_BASE_ID, AIRTABLE_API_KEY } = process.env;
   const TABLE = process.env.AIRTABLE_TABLE || 'templates';
+  const VIEW  = process.env.AIRTABLE_VIEW || undefined;
+
   if (!AIRTABLE_BASE_ID || !AIRTABLE_API_KEY) {
     return res.status(500).json({ error: 'Server misconfigured', details: 'Missing Airtable env vars' });
   }
 
-  // query flags
-  const wantSlug = 'slug' in req.query;         // ?slug=1 -> include { slug: { type } }
-  const typeStyle = (req.query.type || '').toString(); // ?type=kebab|raw
+  const wantSlug  = 'slug' in req.query;               // ?slug=1
+  const typeStyle = (req.query.type || 'kebab');        // kebab | raw
 
   try {
-    const records = await fetchAllAirtable({
-      baseId: AIRTABLE_BASE_ID,
-      apiKey: AIRTABLE_API_KEY,
-      table: TABLE,
-      view: process.env.AIRTABLE_VIEW || undefined,
-    });
-
-    const mapped = records.map((r) => mapRecord(r, { wantSlug, typeStyle }));
+    const records = await fetchAllAirtable({ baseId: AIRTABLE_BASE_ID, apiKey: AIRTABLE_API_KEY, table: TABLE, view: VIEW });
+    const mapped  = records.map(r => mapRecordExact(r, { wantSlug, typeStyle }));
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.status(200).json({ records: mapped });
   } catch (err) {
     console.error('Airtable error', err);
-    const details = (err && err.message) || String(err);
-    return res.status(500).json({ error: 'Airtable error', details });
+    return res.status(500).json({ error: 'Airtable error', details: err?.message || String(err) });
   }
 }
 
@@ -43,12 +37,9 @@ async function fetchAllAirtable({ baseId, apiKey, table, view }) {
   const out = [];
   let url = new URL(`https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(table)}`);
   if (view) url.searchParams.set('view', view);
-  // IMPORTANT: do NOT set fields[] — unknown columns would 400
+
   while (true) {
-    const r = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      cache: 'no-store',
-    });
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, cache: 'no-store' });
     const data = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(data));
     out.push(...(data.records || []));
@@ -58,47 +49,85 @@ async function fetchAllAirtable({ baseId, apiKey, table, view }) {
   return out;
 }
 
-function mapRecord(rec, { wantSlug, typeStyle }) {
+const clean = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+const toKebab = s => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+function pickExact(obj, keys) {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+  }
+  return undefined;
+}
+function tryJSON(v) {
+  if (!v) return null;
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(String(v)); } catch { return null; }
+}
+function toArray(v) {
+  if (Array.isArray(v)) return v;
+  const parsed = tryJSON(v);
+  return Array.isArray(parsed) ? parsed : [];
+}
+function toObject(v) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+  const parsed = tryJSON(v);
+  return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+}
+function toBool(v) {
+  if (v === true || v === false) return v;
+  const s = String(v ?? '').trim().toLowerCase();
+  if (['1','true','yes','y'].includes(s)) return true;
+  if (['0','false','no','n',''].includes(s)) return false;
+  return false;
+}
+
+function mapRecordExact(rec, { wantSlug, typeStyle }) {
   const f = rec.fields || {};
 
-  const template_id = clean(firstNonEmpty(
-    f.template_id, f.Template_id, f['Template ID'], f['template id']
-  ));
-  const name = clean(firstNonEmpty(f.name, f.Name, f.Title));
+  // Exact-capitalised column names first, then lower/alt fallbacks as backup.
+  const template_id = clean(pickExact(f, ['Template_id', 'template_id', 'Template ID', 'template id']) ?? rec.id);
+  const name        = clean(pickExact(f, ['Name', 'name', 'Title', 'title']) ?? '');
+  const TYPELabel   = clean(pickExact(f, ['TYPE', 'Type']) ?? '');
 
-  // Human “TYPE” (pretty label)
-  const TYPE = clean(firstNonEmpty(f.TYPE, f.Type, f['TYPE Label']));
+  // Machine type: prefer explicit "Type" (machine); else derive from TYPE label.
+  const typeMachineRaw = clean(pickExact(f, ['Type', 'type', 'Type (machine)']) ?? '');
+  const typeOut = (typeStyle === 'raw')
+    ? (typeMachineRaw || TYPELabel || '')
+    : toKebab(typeMachineRaw || TYPELabel || '');
 
-  // Machine type (kebab preferred). If not present, derive from TYPE.
-  const typeRaw = clean(firstNonEmpty(f.type, f.Type_machine, f['Type (machine)']));
-  const type = (typeStyle === 'raw')
-    ? (typeRaw || TYPE || '')
-    : toKebab(typeRaw || TYPE || '');
+  // JSON blobs
+  const fields_json = pickExact(f, ['Fields_json', 'fields_json', 'Fields']);
+  const layout_spec = pickExact(f, ['Layout_spec', 'layout_spec', 'Layout']);
+  const type_meta   = pickExact(f, ['Type_meta', 'TYPE_META', 'type_meta']);
 
-  // JSON blobs (any of these column names will work)
-  const fields_json = firstNonEmpty(f.fields_json, f.Fields_json, f.fields, f.Fields);
-  const layout_spec = firstNonEmpty(f.layout_spec, f.Layout_spec, f.layout, f.Layout);
-  const type_meta   = firstNonEmpty(f.type_meta, f.TYPE_META, f.Type_meta, f.TypeMeta);
+  // Optional flags (exact first)
+  const requires_photo = toBool(pickExact(f, ['Requires_photo', 'requires_photo']));
+  const requires_text  = toBool(pickExact(f, ['Requires_text',  'requires_text']));
+  const optional       = toBool(pickExact(f, ['Optional',       'optional']));
+  const optional_photo = toBool(pickExact(f, ['Optional_photo', 'optional_photo']));
+  const optional_text  = toBool(pickExact(f, ['Optional_text',  'optional_text']));
 
-  const fields = toArrayJSON(fields_json);
-  const layout = toObjectJSON(layout_spec);
-  const typeMeta = toObjectJSON(type_meta) || {};
+  // Base image (string URL or attachments array)
+  let base_image = pickExact(f, ['Base_image', 'base_image']);
+  if (Array.isArray(base_image) && base_image[0]?.url) base_image = base_image[0].url;
 
-  // Optional booleans — tolerate missing/renamed
-  const requires_photo = toBool(firstNonEmpty(f.requires_photo, f.Requires_photo, f['Requires photo']));
-  const requires_text  = toBool(firstNonEmpty(f.requires_text,  f.Requires_text,  f['Requires text']));
-  const optional       = toBool(firstNonEmpty(f.optional,       f.Optional));
-  const optional_photo = toBool(firstNonEmpty(f.optional_photo, f.Optional_photo, f['Optional photo']));
-  const optional_text  = toBool(firstNonEmpty(f.optional_text,  f.Optional_text,  f['Optional text']));
+  // Parse JSON fields
+  const fields = toArray(fields_json);
+  const layout = toObject(layout_spec);
 
-  // Base image: allow URL string or attachment array
-  let base_image = firstNonEmpty(f.base_image, f.Base_image, f['Base Image']);
-  // leave as-is; frontend normaliser already handles attachment arrays
+  // typeMeta: accept JSON object or string; empty -> {}
+  let typeMeta = toObject(type_meta);
+  if (!typeMeta && typeof type_meta === 'string') {
+    // allow plain text in Type_meta as instructions
+    typeMeta = { instructions_md: String(type_meta) };
+  }
+  if (!typeMeta) typeMeta = {};
 
   const out = {
     template_id,
     name,
-    TYPE,
+    TYPE: TYPELabel,
     fields,
     layout,
     requires_photo,
@@ -106,40 +135,10 @@ function mapRecord(rec, { wantSlug, typeStyle }) {
     optional,
     optional_photo,
     optional_text,
-    base_image,
-    type,
+    base_image: base_image ?? null,
+    type: typeOut,
     typeMeta,
   };
-  if (wantSlug) out.slug = { type };
+  if (wantSlug) out.slug = { type: typeOut };
   return out;
-}
-
-function firstNonEmpty(...vals) {
-  for (const v of vals) {
-    if (v === null || v === undefined) continue;
-    if (typeof v === 'string' && v.trim() === '') continue;
-    return v;
-  }
-  return undefined;
-}
-function clean(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
-function toKebab(s) { return clean(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
-function toBool(v) {
-  if (v === true || v === false) return v;
-  const s = String(v || '').trim().toLowerCase();
-  if (['1', 'true', 'yes', 'y'].includes(s)) return true;
-  if (['0', 'false', 'no', 'n', ''].includes(s)) return false;
-  return false;
-}
-function toObjectJSON(v) {
-  try {
-    if (!v) return null;
-    if (typeof v === 'string') return JSON.parse(v);
-    if (typeof v === 'object') return v;
-    return null;
-  } catch { return null; }
-}
-function toArrayJSON(v) {
-  const o = toObjectJSON(v);
-  return Array.isArray(o) ? o : [];
 }
