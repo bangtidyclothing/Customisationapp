@@ -11,46 +11,27 @@
     .card{border:1px solid var(--bd);border-radius:12px;padding:12px;background:#fff;margin:12px 0;}
     .muted{color:var(--muted);}
     button{padding:9px 14px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;}
-    .req li{margin:4px 0;}
-    .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;}
-    .hidden{display:none!important;}
   </style>
 </head>
 <body>
-  <div id="app">
-    <div class="card">
-      <div class="muted mono" id="routeLine">Loading route…</div>
-      <h1 id="pageTitle">Loading…</h1>
-      <div id="instructions" class="muted">—</div>
-    </div>
+  <div class="card">
+    <div class="muted" id="routeLine">Loading route…</div>
+    <h1 id="pageTitle">Loading…</h1>
+  </div>
 
-    <div class="card">
-      <strong>Requirements</strong>
-      <ul id="reqList" class="req"></ul>
-      <div id="reqEmpty" class="muted">No special requirements.</div>
+  <div class="card">
+    <div class="muted"><strong>Context</strong></div>
+    <div id="ctx">template_id= · orderId= · name=</div>
+    <div style="margin-top:8px">
+      <button id="openBtn">Open Designer</button>
+      <span id="tplName" class="muted" style="margin-left:8px"></span>
     </div>
-
-    <div class="card">
-      <div class="muted"><strong>Context</strong></div>
-      <div id="ctx" class="mono">template_id= · orderId= · name=</div>
-      <div style="margin-top:8px">
-        <button id="openBtn">Open Designer</button>
-        <span id="tplName" class="muted" style="margin-left:8px"></span>
-      </div>
-    </div>
-
-    <div id="dbg" class="card hidden">
-      <strong>Debug</strong>
-      <div class="mono" id="dbgApi"></div>
-      <div class="mono" id="dbgKeys"></div>
-      <div class="mono" id="dbgTypeMeta"></div>
-    </div>
-
-    <div id="err" class="card muted hidden"></div>
   </div>
 
   <script>
-  // ------- utils -------
+  // utils
+  const clean = s => String(s||'').replace(/\s+/g,' ').trim();
+  const toSlug = s => clean(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
   function getParams(){
     const qs = new URLSearchParams(location.search);
     if (qs.toString()) return qs;
@@ -61,25 +42,13 @@
   }
   function qp(k){ return getParams().get(k) || ""; }
   function hashSlug(){
-    const m = (location.hash||"").match(/^#\/?([^?]+)/);
+    const h = location.hash || "";
+    const m = h.match(/^#\/?([^?&]+)/);
     return m ? m[1].trim().toLowerCase() : "";
   }
-  function clean(s){ return String(s||'').replace(/\s+/g,' ').trim(); }
-  function toSlug(s){ return clean(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
   function titleCase(s){ return clean(s).replace(/\b[a-z]/g, c => c.toUpperCase()); }
-  function keyLower(s){ return String(s||'').trim().toLowerCase(); }
 
-  function md(s){
-    const esc = String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return esc
-      .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
-      .replace(/\*([^*]+)\*/g,'<em>$1</em>')
-      .replace(/`([^`]+)`/g,'<code>$1</code>')
-      .replace(/\n{2,}/g,'</p><p>')
-      .replace(/\n/g,'<br/>');
-  }
-
-  // API (accept only absolute http(s) override)
+  // API
   const API_BASE = (() => {
     const override = qp('api');
     if (override && /^https?:\/\//i.test(override)) return override;
@@ -101,8 +70,6 @@
     const r = await fetch(url, { cache:'no-store' });
     const json = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(json));
-    // expose for debug
-    window.__API_URL__ = url.toString();
     return (json.records || []).map(normalizeRecord);
   }
 
@@ -110,17 +77,11 @@
     const list = records.filter(r => (r.type || toSlug(r.TYPE || '')) === slug);
     if (!list.length) return null;
     if (preferId){
-      const hit = list.find(r => keyLower(r.template_id) === keyLower(preferId));
+      const hit = list.find(r => String(r.template_id||'').toLowerCase() === String(preferId||'').toLowerCase());
       if (hit) return hit;
     }
     const withLayout = list.find(r => (Array.isArray(r.fields) && r.fields.length) || r.layout);
     return withLayout || list[0];
-  }
-
-  function parseMaybeJSON(v){
-    if (!v) return null;
-    if (typeof v === 'object') return v;
-    try { return JSON.parse(String(v)); } catch { return null; }
   }
 
   (async function boot(){
@@ -132,58 +93,17 @@
     const name = qp('name');
     const photo = qp('photo');
 
-    const debug = qp('debug') === '1';
-
     try{
       const recs = await fetchTemplates();
       const tpl = pickTemplateByType(recs, slug, template_id);
 
-      if (debug) {
-        const dbg = document.getElementById('dbg');
-        dbg.classList.remove('hidden');
-        document.getElementById('dbgApi').textContent = `API: ${window.__API_URL__ || '(unknown)'}`;
-        document.getElementById('dbgKeys').textContent = `Template keys: ${tpl ? Object.keys(tpl).join(', ') : '(no template)'}`;
-      }
-
       if (!tpl){
         document.getElementById('pageTitle').textContent = 'Template type not found';
-        document.getElementById('err').classList.remove('hidden');
-        document.getElementById('err').textContent = 'No template matches this TYPE. Check TYPE value and slug.';
         return;
       }
 
-      // Resolve typeMeta robustly
-      let typeMeta = tpl.typeMeta;
-      if (!typeMeta) typeMeta = tpl.TYPE_META || tpl.type_meta || null;
-      if (typeMeta && typeof typeMeta === 'string') typeMeta = parseMaybeJSON(typeMeta);
-      if (!typeMeta || typeof typeMeta !== 'object') typeMeta = {};
-
-      if (debug) {
-        document.getElementById('dbgTypeMeta').textContent = `typeMeta resolved:\n${JSON.stringify(typeMeta, null, 2)}`;
-      }
-
-      const title = typeMeta.title || `${titleCase((tpl.TYPE||'').replace(/-/g,' ')) || titleCase(slug)} — Personalised`;
+      const title = `${titleCase(slug)} — Personalised`;
       document.getElementById('pageTitle').textContent = title;
-
-      const inst = typeMeta.instructions_md || typeMeta.instructions || '';
-      document.getElementById('instructions').innerHTML = inst ? `<p>${md(inst)}</p>` : '—';
-
-      // requirements fallback
-      const reqArr = Array.isArray(typeMeta.requirements) ? typeMeta.requirements
-                    : (Array.isArray(tpl.requirements) ? tpl.requirements : []);
-      const reqList = document.getElementById('reqList');
-      const reqEmpty = document.getElementById('reqEmpty');
-      reqList.innerHTML = '';
-      if (reqArr.length){
-        reqEmpty.style.display = 'none';
-        reqArr.forEach(item => {
-          const li = document.createElement('li');
-          li.textContent = item;
-          reqList.appendChild(li);
-        });
-      } else {
-        reqEmpty.style.display = 'block';
-      }
 
       document.getElementById('ctx').textContent =
         `template_id=${template_id || '(auto ' + tpl.template_id + ')'} · orderId=${orderId || '—'} · name=${name || '—'}`;
@@ -201,9 +121,6 @@
       };
     } catch(err){
       document.getElementById('pageTitle').textContent = 'Load error';
-      const el = document.getElementById('err');
-      el.classList.remove('hidden');
-      el.textContent = (err && err.message) || String(err);
     }
   })();
   </script>
