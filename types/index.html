@@ -1,185 +1,179 @@
-// api/templates.js
-export default async function handler(req, res) {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Vary', 'Origin');
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(204).end();
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bang Tidy — Type Router</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{--bd:#ddd;--muted:#666;--fg:#111;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:var(--fg);}
+    h1{margin:0 0 8px;}
+    .card{border:1px solid var(--bd);border-radius:12px;padding:12px;background:#fff;margin:12px 0;}
+    .muted{color:var(--muted);}
+    button{padding:9px 14px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;}
+    .req li{margin:4px 0;}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
+    .hidden{display:none!important;}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="card">
+      <div class="muted mono" id="routeLine">Loading route…</div>
+      <h1 id="pageTitle">Loading…</h1>
+      <div id="instructions" class="muted">—</div>
+    </div>
+
+    <div class="card">
+      <strong>Requirements</strong>
+      <ul id="reqList" class="req"></ul>
+      <div id="reqEmpty" class="muted">No special requirements.</div>
+    </div>
+
+    <div class="card">
+      <div class="muted"><strong>Context</strong></div>
+      <div id="ctx" class="mono">template_id= · orderId= · name=</div>
+      <div style="margin-top:8px">
+        <button id="openBtn">Open Designer</button>
+        <span id="tplName" class="muted" style="margin-left:8px"></span>
+      </div>
+    </div>
+
+    <div id="err" class="card muted hidden"></div>
+  </div>
+
+  <script>
+  // ------- utils -------
+  function getParams(){
+    // Prefer normal query string
+    const qs = new URLSearchParams(location.search);
+    if (qs.toString()) return qs;
+    // Fallback: if query ended up inside hash
+    const h = location.hash || "";
+    const qPos = h.indexOf("?");
+    if (qPos !== -1) return new URLSearchParams(h.slice(qPos + 1));
+    return new URLSearchParams("");
+  }
+  function qp(k){ return getParams().get(k) || ""; }
+  function hashSlug(){
+    const m = (location.hash||"").match(/^#\/?([^?]+)/);
+    return m ? m[1].trim().toLowerCase() : "";
+  }
+  function clean(s){ return String(s||'').replace(/\s+/g,' ').trim(); }
+  function toSlug(s){ return clean(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
+  function titleCase(s){ return clean(s).replace(/\b[a-z]/g, c => c.toUpperCase()); }
+  function keyLower(s){ return String(s||'').trim().toLowerCase(); }
+
+  // tiny markdown -> html
+  function md(s){
+    const esc = String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return esc
+      .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/\n{2,}/g,'</p><p>')
+      .replace(/\n/g,'<br/>');
   }
 
-  const { AIRTABLE_BASE_ID, AIRTABLE_API_KEY } = process.env;
-  const TABLE = process.env.AIRTABLE_TABLE || 'templates';
-  if (!AIRTABLE_BASE_ID || !AIRTABLE_API_KEY) {
-    return res.status(500).json({ error: 'Server misconfigured', details: 'Missing Airtable env vars' });
+  // API (accept only absolute http(s) override)
+  const API_BASE = (() => {
+    const override = qp('api');
+    if (override && /^https?:\/\//i.test(override)) return override;
+    return "https://customisationapp-new.vercel.app/api/templates";
+  })();
+
+  function normalizeRecord(t){
+    const id   = clean(t.template_id);
+    const name = clean(t.name);
+    const TYPE = clean(t.TYPE || t.type || '');
+    const typeKebab = t.type ? clean(t.type) : toSlug(TYPE);
+    return { ...t, template_id:id, name, TYPE, type:typeKebab };
   }
 
-  const wantSlug  = 'slug' in req.query;          // ?slug=1 -> include { slug: { type } }
-  const typeStyle = (req.query.type || '').toString(); // ?type=kebab|raw
-
-  try {
-    const records = await fetchAllAirtable({
-      baseId: AIRTABLE_BASE_ID,
-      apiKey: AIRTABLE_API_KEY,
-      table: TABLE,
-      view: process.env.AIRTABLE_VIEW || undefined,
-    });
-
-    const mapped = records.map((r) => mapRecord(r, { wantSlug, typeStyle }));
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    return res.status(200).json({ records: mapped });
-  } catch (err) {
-    console.error('Airtable error', err);
-    const details = (err && err.message) || String(err);
-    return res.status(500).json({ error: 'Airtable error', details });
+  async function fetchTemplates(){
+    const url = new URL(API_BASE);
+    url.searchParams.set('slug','1');
+    url.searchParams.set('type','kebab');
+    const r = await fetch(url, { cache:'no-store' });
+    const json = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(json));
+    return (json.records || []).map(normalizeRecord);
   }
-}
 
-/* ---------------- helpers ---------------- */
-
-async function fetchAllAirtable({ baseId, apiKey, table, view }) {
-  const out = [];
-  let url = new URL(`https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(table)}`);
-  if (view) url.searchParams.set('view', view);
-  // Do NOT request fields[]; unknown columns would 400
-  while (true) {
-    const r = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      cache: 'no-store',
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(JSON.stringify(data));
-    out.push(...(data.records || []));
-    if (!data.offset) break;
-    url.searchParams.set('offset', data.offset);
-  }
-  return out;
-}
-
-// --- fuzzy field pickers ---
-const normKey = k => String(k||'').toLowerCase().replace(/[^a-z0-9]/g,''); // strip spaces/underscores etc.
-function pickField(obj, candidates){
-  if (!obj) return undefined;
-  // 1) exact hits
-  for (const c of candidates) if (c in obj) return obj[c];
-  // 2) fuzzy: normalise keys and look for the first candidate normalised form
-  const map = new Map(Object.keys(obj).map(k => [normKey(k), k]));
-  for (const c of candidates) {
-    const nk = normKey(c);
-    if (map.has(nk)) return obj[map.get(nk)];
-  }
-  // 3) final fuzzy by contains (e.g., anything that includes "typemeta")
-  for (const [nk, orig] of map.entries()) {
-    for (const c of candidates) {
-      const ck = normKey(c);
-      if (nk.includes(ck)) return obj[orig];
+  function pickTemplateByType(records, slug, preferId){
+    const list = records.filter(r => (r.type || toSlug(r.TYPE || '')) === slug);
+    if (!list.length) return null;
+    if (preferId){
+      const hit = list.find(r => keyLower(r.template_id) === keyLower(preferId));
+      if (hit) return hit;
     }
+    const withLayout = list.find(r => (Array.isArray(r.fields) && r.fields.length) || r.layout);
+    return withLayout || list[0];
   }
-  return undefined;
-}
 
-function firstNonEmpty(...vals) {
-  for (const v of vals) {
-    if (v === null || v === undefined) continue;
-    if (typeof v === 'string' && v.trim() === '') continue;
-    return v;
-  }
-  return undefined;
-}
-function clean(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
-function toKebab(s) { return clean(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
-function toBool(v) {
-  if (v === true || v === false) return v;
-  const s = String(v || '').trim().toLowerCase();
-  if (['1', 'true', 'yes', 'y'].includes(s)) return true;
-  if (['0', 'false', 'no', 'n', ''].includes(s)) return false;
-  return false;
-}
-function toObjectJSON(v) {
-  try {
-    if (!v) return null;
-    if (typeof v === 'string') return JSON.parse(v);
-    if (typeof v === 'object') return v;
-    return null;
-  } catch { return null; }
-}
-function toArrayJSON(v) {
-  const o = toObjectJSON(v);
-  return Array.isArray(o) ? o : [];
-}
+  (async function boot(){
+    const slug = hashSlug();
+    document.getElementById('routeLine').textContent = `Personalised route: ${slug || '—'}`;
 
-function mapRecord(rec, { wantSlug, typeStyle }) {
-  const f = rec.fields || {};
+    const template_id = clean(qp('template_id'));
+    const orderId = qp('orderId');
+    const name = qp('name');
+    const photo = qp('photo');
 
-  const template_id = clean(firstNonEmpty(
-    pickField(f, ['template_id','Template_id','Template ID','template id','TEMPLATE_ID']),
-    f.id // absolute last resort
-  ));
+    try{
+      const recs = await fetchTemplates();
+      const tpl = pickTemplateByType(recs, slug, template_id);
 
-  const name = clean(firstNonEmpty(
-    pickField(f, ['name','Name','title','Title'])
-  ));
+      if (!tpl){
+        document.getElementById('pageTitle').textContent = 'Template type not found';
+        document.getElementById('err').classList.remove('hidden');
+        document.getElementById('err').textContent = 'No template matches this TYPE. Check TYPE value and slug.';
+        return;
+      }
 
-  // Human “TYPE” (pretty label)
-  const TYPE = clean(firstNonEmpty(
-    pickField(f, ['TYPE','Type','Type Label','TYPE Label'])
-  ));
+      const typeMeta = tpl.typeMeta || {};
+      const title = typeMeta.title || `${titleCase((tpl.TYPE||'').replace(/-/g,' ')) || titleCase(slug)} — Personalised`;
+      document.getElementById('pageTitle').textContent = title;
 
-  // Machine type (kebab). If not present, derive from TYPE.
-  const typeRaw = clean(firstNonEmpty(
-    pickField(f, ['type','Type_machine','Type (machine)','TYPE (machine)'])
-  ));
-  const type = (typeStyle === 'raw')
-    ? (typeRaw || TYPE || '')
-    : toKebab(typeRaw || TYPE || '');
+      const inst = typeMeta.instructions_md || typeMeta.instructions || '';
+      document.getElementById('instructions').innerHTML = inst ? `<p>${md(inst)}</p>` : '—';
 
-  // JSON blobs (very flexible names):
-  const fields_json = pickField(f, ['fields_json','Fields_json','fields','Fields','FIELDS_JSON','Fields JSON']);
-  const layout_spec = pickField(f, ['layout_spec','Layout_spec','layout','Layout','LAYOUT_SPEC','Layout Spec']);
-  const type_meta   = pickField(f, ['type_meta','TYPE_META','Type_meta','TypeMeta','Type meta','TYPE META','Type Meta']);
+      const list = Array.isArray(typeMeta.requirements) ? typeMeta.requirements : [];
+      const reqList = document.getElementById('reqList');
+      const reqEmpty = document.getElementById('reqEmpty');
+      reqList.innerHTML = '';
+      if (list.length){
+        reqEmpty.style.display = 'none';
+        list.forEach(item => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          reqList.appendChild(li);
+        });
+      } else {
+        reqEmpty.style.display = 'block';
+      }
 
-  const fields   = toArrayJSON(fields_json);
-  const layout   = toObjectJSON(layout_spec);
-  const typeMeta = toObjectJSON(type_meta) || {};
+      document.getElementById('ctx').textContent =
+        `template_id=${template_id || '(auto ' + tpl.template_id + ')'} · orderId=${orderId || '—'} · name=${name || '—'}`;
 
-  // Optional booleans — tolerate missing/renamed
-  const requires_photo = toBool(firstNonEmpty(
-    pickField(f, ['requires_photo','Requires_photo','Requires photo','REQUIRES_PHOTO'])
-  ));
-  const requires_text  = toBool(firstNonEmpty(
-    pickField(f, ['requires_text','Requires_text','Requires text','REQUIRES_TEXT'])
-  ));
-  const optional       = toBool(firstNonEmpty(
-    pickField(f, ['optional','Optional'])
-  ));
-  const optional_photo = toBool(firstNonEmpty(
-    pickField(f, ['optional_photo','Optional_photo','Optional photo'])
-  ));
-  const optional_text  = toBool(firstNonEmpty(
-    pickField(f, ['optional_text','Optional_text','Optional text'])
-  ));
-
-  // Base image: allow URL string or attachment array
-  let base_image = firstNonEmpty(
-    pickField(f, ['base_image','Base_image','Base Image','BASE_IMAGE'])
-  );
-
-  const out = {
-    template_id,
-    name,
-    TYPE,
-    fields,
-    layout,
-    requires_photo,
-    requires_text,
-    optional,
-    optional_photo,
-    optional_text,
-    base_image,
-    type,
-    typeMeta,
-  };
-  if (wantSlug) out.slug = { type };
-  return out;
-}
+      document.getElementById('tplName').textContent = `— ${tpl.name || ''}`;
+      document.getElementById('openBtn').onclick = () => {
+        try { sessionStorage.setItem('skipRouterOnce','1'); } catch {}
+        const p = new URLSearchParams();
+        p.set('template_id', template_id || tpl.template_id);
+        if (orderId) p.set('orderId', orderId);
+        if (name) p.set('name', name);
+        if (photo) p.set('photo', photo);
+        p.set('noroute','1');
+        location.href = `../index.html?${p.toString()}`;
+      };
+    } catch(err){
+      document.getElementById('pageTitle').textContent = 'Load error';
+      const el = document.getElementById('err');
+      el.classList.remove('hidden');
+      el.textContent = (err && err.message) || String(err);
+    }
+  })();
+  </script>
+</body>
+</html>
