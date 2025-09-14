@@ -12,7 +12,7 @@
     .muted{color:var(--muted);}
     button{padding:9px 14px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;}
     .req li{margin:4px 0;}
-    .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;}
     .hidden{display:none!important;}
   </style>
 </head>
@@ -39,16 +39,21 @@
       </div>
     </div>
 
+    <div id="dbg" class="card hidden">
+      <strong>Debug</strong>
+      <div class="mono" id="dbgApi"></div>
+      <div class="mono" id="dbgKeys"></div>
+      <div class="mono" id="dbgTypeMeta"></div>
+    </div>
+
     <div id="err" class="card muted hidden"></div>
   </div>
 
   <script>
   // ------- utils -------
   function getParams(){
-    // Prefer normal query string
     const qs = new URLSearchParams(location.search);
     if (qs.toString()) return qs;
-    // Fallback: if query ended up inside hash
     const h = location.hash || "";
     const qPos = h.indexOf("?");
     if (qPos !== -1) return new URLSearchParams(h.slice(qPos + 1));
@@ -64,7 +69,6 @@
   function titleCase(s){ return clean(s).replace(/\b[a-z]/g, c => c.toUpperCase()); }
   function keyLower(s){ return String(s||'').trim().toLowerCase(); }
 
-  // tiny markdown -> html
   function md(s){
     const esc = String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     return esc
@@ -97,6 +101,8 @@
     const r = await fetch(url, { cache:'no-store' });
     const json = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(json));
+    // expose for debug
+    window.__API_URL__ = url.toString();
     return (json.records || []).map(normalizeRecord);
   }
 
@@ -111,6 +117,12 @@
     return withLayout || list[0];
   }
 
+  function parseMaybeJSON(v){
+    if (!v) return null;
+    if (typeof v === 'object') return v;
+    try { return JSON.parse(String(v)); } catch { return null; }
+  }
+
   (async function boot(){
     const slug = hashSlug();
     document.getElementById('routeLine').textContent = `Personalised route: ${slug || '—'}`;
@@ -120,9 +132,18 @@
     const name = qp('name');
     const photo = qp('photo');
 
+    const debug = qp('debug') === '1';
+
     try{
       const recs = await fetchTemplates();
       const tpl = pickTemplateByType(recs, slug, template_id);
+
+      if (debug) {
+        const dbg = document.getElementById('dbg');
+        dbg.classList.remove('hidden');
+        document.getElementById('dbgApi').textContent = `API: ${window.__API_URL__ || '(unknown)'}`;
+        document.getElementById('dbgKeys').textContent = `Template keys: ${tpl ? Object.keys(tpl).join(', ') : '(no template)'}`;
+      }
 
       if (!tpl){
         document.getElementById('pageTitle').textContent = 'Template type not found';
@@ -131,20 +152,31 @@
         return;
       }
 
-      const typeMeta = tpl.typeMeta || {};
+      // Resolve typeMeta robustly
+      let typeMeta = tpl.typeMeta;
+      if (!typeMeta) typeMeta = tpl.TYPE_META || tpl.type_meta || null;
+      if (typeMeta && typeof typeMeta === 'string') typeMeta = parseMaybeJSON(typeMeta);
+      if (!typeMeta || typeof typeMeta !== 'object') typeMeta = {};
+
+      if (debug) {
+        document.getElementById('dbgTypeMeta').textContent = `typeMeta resolved:\n${JSON.stringify(typeMeta, null, 2)}`;
+      }
+
       const title = typeMeta.title || `${titleCase((tpl.TYPE||'').replace(/-/g,' ')) || titleCase(slug)} — Personalised`;
       document.getElementById('pageTitle').textContent = title;
 
       const inst = typeMeta.instructions_md || typeMeta.instructions || '';
       document.getElementById('instructions').innerHTML = inst ? `<p>${md(inst)}</p>` : '—';
 
-      const list = Array.isArray(typeMeta.requirements) ? typeMeta.requirements : [];
+      // requirements fallback
+      const reqArr = Array.isArray(typeMeta.requirements) ? typeMeta.requirements
+                    : (Array.isArray(tpl.requirements) ? tpl.requirements : []);
       const reqList = document.getElementById('reqList');
       const reqEmpty = document.getElementById('reqEmpty');
       reqList.innerHTML = '';
-      if (list.length){
+      if (reqArr.length){
         reqEmpty.style.display = 'none';
-        list.forEach(item => {
+        reqArr.forEach(item => {
           const li = document.createElement('li');
           li.textContent = item;
           reqList.appendChild(li);
