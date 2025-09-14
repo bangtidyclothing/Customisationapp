@@ -13,6 +13,7 @@
     button{padding:9px 14px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;}
     .req li{margin:4px 0;}
     .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
+    .hidden{display:none!important;}
   </style>
 </head>
 <body>
@@ -44,10 +45,14 @@
   <script>
   // ------- utils -------
   function getParams(){
+    // Primary: regular query string
     const qs = new URLSearchParams(location.search);
     if (qs.toString()) return qs;
-    const h = (location.hash||"").replace(/^#\??/,'');
-    return new URLSearchParams(h);
+    // Fallback: if query accidentally ends up inside the hash
+    const h = location.hash || "";
+    const qPos = h.indexOf("?");
+    if (qPos !== -1) return new URLSearchParams(h.slice(qPos + 1));
+    return new URLSearchParams("");
   }
   function qp(k){ return getParams().get(k) || ""; }
   function hashSlug(){
@@ -99,8 +104,7 @@
       const hit = list.find(r => keyLower(r.template_id) === keyLower(preferId));
       if (hit) return hit;
     }
-    // prefer one that actually has fields/layout
-    const withLayout = list.find(r => Array.isArray(r.fields) && r.fields.length || r.layout);
+    const withLayout = list.find(r => (Array.isArray(r.fields) && r.fields.length) || r.layout);
     return withLayout || list[0];
   }
 
@@ -131,7 +135,6 @@
       const inst = typeMeta.instructions_md || typeMeta.instructions || '';
       document.getElementById('instructions').innerHTML = inst ? `<p>${md(inst)}</p>` : '—';
 
-      // requirements
       const list = Array.isArray(typeMeta.requirements) ? typeMeta.requirements : [];
       const reqList = document.getElementById('reqList');
       const reqEmpty = document.getElementById('reqEmpty');
@@ -147,11 +150,9 @@
         reqEmpty.style.display = 'block';
       }
 
-      // context line
       document.getElementById('ctx').textContent =
         `template_id=${template_id || '(auto ' + tpl.template_id + ')'} · orderId=${orderId || '—'} · name=${name || '—'}`;
 
-      // button label + action
       document.getElementById('tplName').textContent = `— ${tpl.name || ''}`;
       document.getElementById('openBtn').onclick = () => {
         try { sessionStorage.setItem('skipRouterOnce','1'); } catch {}
