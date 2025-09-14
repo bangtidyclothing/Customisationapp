@@ -75,10 +75,11 @@
   }
   function qp(k){ return getParams().get(k) || ""; }
 
-  // ---- API base (override via ?api= for debugging) ----
+  // ---- API base (accept only absolute http(s) override) ----
   const API_BASE = (() => {
     const override = qp('api');
-    return override || "https://customisationapp-new.vercel.app/api/templates";
+    if (override && /^https?:\/\//i.test(override)) return override;
+    return "https://customisationapp-new.vercel.app/api/templates";
   })();
 
   // ---- API loader (timeout + visible errors) ----
@@ -398,7 +399,6 @@
     const slug = toSlug(raw);
     if (!slug) return false;
 
-    // Place query BEFORE hash
     const base = `types/index.html`;
 
     // prevent loop if already there
@@ -410,6 +410,8 @@
     for (const [k, v] of Object.entries(extraParams)) {
       if (v != null && v !== '') p.set(k, v);
     }
+    // do not forward a broken api override
+    p.delete('api');
 
     location.assign(`${base}?${p.toString()}#/${slug}`);
     return true;
