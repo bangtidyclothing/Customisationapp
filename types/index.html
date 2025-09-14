@@ -1,160 +1,175 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Custom Type — Personalised</title>
+  <meta charset="UTF-8" />
+  <title>Bang Tidy — Type Router</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { --bd:#ddd; --muted:#666; }
-    body{font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:24px}
-    .badge{display:inline-block;background:#eef;border:1px solid #99c;padding:4px 8px;border-radius:8px;margin-left:8px;font-size:12px;color:#224}
-    .meta{color:#555;margin-top:8px}
-    .card{border:1px solid var(--bd); border-radius:12px; padding:12px; margin-top:12px; background:#fff}
-    h1,h2{margin:0 0 8px}
-    ul{margin:6px 0 0 18px}
-    code{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px}
-    a{color:#06c}
-    .hidden{display:none !important}
-    /* Button */
-    .btn{display:inline-block;padding:8px 14px;border:1px solid #99c;background:#eef;border-radius:8px;text-decoration:none}
-    .btn:hover{background:#e6eefc}
+    :root{--bd:#ddd;--muted:#666;--fg:#111;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:var(--fg);}
+    h1{margin:0 0 8px;}
+    .card{border:1px solid var(--bd);border-radius:12px;padding:12px;background:#fff;margin:12px 0;}
+    .muted{color:var(--muted);}
+    button{padding:9px 14px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;}
+    .req li{margin:4px 0;}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
   </style>
 </head>
 <body>
-  <h1 id="title">Personalised <span class="badge" id="slugBadge"></span></h1>
+  <div id="app">
+    <div class="card">
+      <div class="muted mono" id="routeLine">Loading route…</div>
+      <h1 id="pageTitle">Loading…</h1>
+      <div id="instructions" class="muted">—</div>
+    </div>
 
-  <div class="card">
-    <h2>Instructions</h2>
-    <div id="instructions" class="meta">Loading type details…</div>
+    <div class="card">
+      <strong>Requirements</strong>
+      <ul id="reqList" class="req"></ul>
+      <div id="reqEmpty" class="muted">No special requirements.</div>
+    </div>
+
+    <div class="card">
+      <div class="muted"><strong>Context</strong></div>
+      <div id="ctx" class="mono">template_id= · orderId= · name=</div>
+      <div style="margin-top:8px">
+        <button id="openBtn">Open Designer</button>
+        <span id="tplName" class="muted" style="margin-left:8px"></span>
+      </div>
+    </div>
+
+    <div id="err" class="card muted hidden"></div>
   </div>
-
-  <div class="card">
-    <h2>Requirements</h2>
-    <ul id="reqList"></ul>
-  </div>
-
-  <p class="meta" id="info"></p>
-  <p id="err" class="hidden"></p>
-
-  <!-- CTA: Open Designer -->
-  <p><a id="startLink" class="btn" href="../index.html">Open Designer</a></p>
-
-  <p><a href="../index.html">← Back</a></p>
 
   <script>
-    // ---------- helpers ----------
-    const API_URL = "https://customisationapp-new.vercel.app/api/templates";
+  // ------- utils -------
+  function getParams(){
+    const qs = new URLSearchParams(location.search);
+    if (qs.toString()) return qs;
+    const h = (location.hash||"").replace(/^#\??/,'');
+    return new URLSearchParams(h);
+  }
+  function qp(k){ return getParams().get(k) || ""; }
+  function hashSlug(){
+    // expects "#/beer-mat-photo"
+    const m = (location.hash||"").match(/^#\/?([^?]+)/);
+    return m ? m[1].trim().toLowerCase() : "";
+  }
+  function clean(s){ return String(s||'').replace(/\s+/g,' ').trim(); }
+  function toSlug(s){ return clean(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
+  function titleCase(s){ return clean(s).replace(/\b[a-z]/g, c => c.toUpperCase()); }
+  function keyLower(s){ return String(s||'').trim().toLowerCase(); }
 
-    function toSlug(s){
-      return String(s||'').toLowerCase().trim()
-        .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+  // tiny markdown -> html for instructions_md
+  function md(s){
+    const esc = String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return esc
+      .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/\n{2,}/g,'</p><p>')
+      .replace(/\n/g,'<br/>');
+  }
+
+  // API (allow ?api= override)
+  const API_BASE = (() => qp('api') || "https://customisationapp-new.vercel.app/api/templates")();
+
+  function normalizeRecord(t){
+    const id   = clean(t.template_id);
+    const name = clean(t.name);
+    const TYPE = clean(t.TYPE || t.type || '');
+    const typeKebab = t.type ? clean(t.type) : toSlug(TYPE);
+    return { ...t, template_id:id, name, TYPE, type:typeKebab };
+  }
+
+  async function fetchTemplates(){
+    const url = new URL(API_BASE);
+    url.searchParams.set('slug','1');
+    url.searchParams.set('type','kebab');
+    const r = await fetch(url, { cache:'no-store' });
+    const json = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(json));
+    return (json.records || []).map(normalizeRecord);
+  }
+
+  function pickTemplateByType(records, slug, preferId){
+    const list = records.filter(r => (r.type || toSlug(r.TYPE || '')) === slug);
+    if (!list.length) return null;
+    if (preferId){
+      const hit = list.find(r => keyLower(r.template_id) === keyLower(preferId));
+      if (hit) return hit;
     }
-    function toTitleCase(s){
-      return String(s||'').split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
-    }
-    function getSlug(){
-      const hash = (location.hash || '').replace(/^#\/?/, '').split(/[?#]/)[0].trim();
-      if (hash) return hash;
-      const qs = new URLSearchParams(location.search);
-      const t = qs.get('type');
-      if (t) return toSlug(t);
-      const path = (location.pathname.split('/types/')[1] || '').replace(/\/+$/,'');
-      return path.endsWith('.html') ? path.slice(0, -5) : path;
-    }
-    function mdToHtml(md){
-      const esc = (s)=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      let h = esc(String(md||''));
-      h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-      h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      h = h.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-      return h.replace(/\n/g,'<br>');
-    }
+    // prefer one that actually has fields/layout
+    const withLayout = list.find(r => Array.isArray(r.fields) && r.fields.length || r.layout);
+    return withLayout || list[0];
+  }
 
-    // ---------- render ----------
-    function renderMeta(slug, meta, query){
-      const title = meta?.title || `${toTitleCase(slug)} — Personalised`;
-      document.title = title;
-      document.getElementById('title').firstChild.nodeValue = title + ' ';
-      document.getElementById('slugBadge').textContent = `route: ${slug}`;
+  (async function boot(){
+    const slug = hashSlug();
+    document.getElementById('routeLine').textContent = `Personalised route: ${slug || '—'}`;
 
-      const instEl = document.getElementById('instructions');
-      instEl.innerHTML = meta?.instructions_md ? mdToHtml(meta.instructions_md) : '—';
+    const template_id = clean(qp('template_id'));
+    const orderId = qp('orderId');
+    const name = qp('name');
+    const photo = qp('photo');
 
-      const ul = document.getElementById('reqList');
-      ul.innerHTML = '';
-      (meta?.requirements || []).forEach(item => {
-        const li = document.createElement('li'); li.textContent = item; ul.appendChild(li);
-      });
-      if ((meta?.requirements || []).length === 0) {
-        const li = document.createElement('li'); li.textContent = 'No special requirements.'; ul.appendChild(li);
-      }
+    try{
+      const recs = await fetchTemplates();
+      const tpl = pickTemplateByType(recs, slug, template_id);
 
-      document.getElementById('info').textContent =
-        `template_id=${query.get('template_id')||''} · orderId=${query.get('orderId')||''} · name=${query.get('name')||''}`;
-    }
-
-    function showError(msg){
-      const e = document.getElementById('err');
-      e.classList.remove('hidden');
-      e.textContent = msg;
-    }
-
-    // ---------- boot ----------
-    (async function boot(){
-      const slug = getSlug() || 'unknown';
-      const qs = new URLSearchParams(location.search);
-
-      // Build API URL. Prefer template_id (exact), else fetch list and match by slug.
-      const url = new URL(API_URL);
-      url.searchParams.set('type', 'kebab'); // include .type
-      url.searchParams.set('slug', '1');     // include .slug
-      if (qs.get('template_id')) url.searchParams.set('template_id', qs.get('template_id'));
-
-      let data;
-      try {
-        const res = await fetch(url.href, { credentials: 'omit', cache: 'no-store' });
-        data = await res.json();
-      } catch {
-        renderMeta(slug, null, qs);
-        showError('Failed to load type details from API.');
-        // still build a basic link
-        const startEl = document.getElementById('startLink');
-        if (startEl) {
-          const u = new URL('../index.html', location.href);
-          u.searchParams.set('type', slug);
-          u.searchParams.set('noroute', '1');
-          startEl.href = u.href;
-        }
+      if (!tpl){
+        document.getElementById('pageTitle').textContent = 'Template type not found';
+        document.getElementById('err').classList.remove('hidden');
+        document.getElementById('err').textContent = 'No template matches this TYPE. Check TYPE value and slug.';
         return;
       }
 
-      const recs = Array.isArray(data?.records) ? data.records : [];
-      let rec = null;
-      if (qs.get('template_id')) {
-        rec = recs[0] || null;
+      const typeMeta = tpl.typeMeta || {};
+      const title = typeMeta.title || `${titleCase((tpl.TYPE||'').replace(/-/g,' ')) || titleCase(slug)} — Personalised`;
+      document.getElementById('pageTitle').textContent = title;
+
+      const inst = typeMeta.instructions_md || typeMeta.instructions || '';
+      document.getElementById('instructions').innerHTML = inst ? `<p>${md(inst)}</p>` : '—';
+
+      // requirements
+      const list = Array.isArray(typeMeta.requirements) ? typeMeta.requirements : [];
+      const reqList = document.getElementById('reqList');
+      const reqEmpty = document.getElementById('reqEmpty');
+      reqList.innerHTML = '';
+      if (list.length){
+        reqEmpty.style.display = 'none';
+        list.forEach(item => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          reqList.appendChild(li);
+        });
       } else {
-        rec = recs.find(r => (r.type || toSlug(r.TYPE || '')) === slug) || null;
+        reqEmpty.style.display = 'block';
       }
 
-      const meta = rec?.typeMeta || null;
-      renderMeta(slug, meta, qs);
+      // context line
+      document.getElementById('ctx').textContent =
+        `template_id=${template_id || '(auto ' + tpl.template_id + ')'} · orderId=${orderId || '—'} · name=${name || '—'}`;
 
-      // Build deep link back to main customiser
-      const startEl = document.getElementById('startLink');
-      if (startEl) {
-        const u = new URL('../index.html', location.href);
-        if (rec?.template_id) u.searchParams.set('template_id', rec.template_id);
-        if (qs.get('orderId')) u.searchParams.set('orderId', qs.get('orderId'));
-        if (qs.get('name'))    u.searchParams.set('name', qs.get('name'));
-        if (qs.get('photo'))   u.searchParams.set('photo', qs.get('photo'));
-        u.searchParams.set('type', slug);
-        startEl.href = u.href;
-        startEl.textContent = rec?.name ? `Open Designer — ${rec.name}` : 'Open Designer';
-      }
-
-      if (!rec) showError('No template record matched this TYPE.');
-      else if (!meta) showError('This TYPE has no meta yet. Add fields in Airtable: type_title, type_instructions_md, type_requirements_json.');
-    })();
+      // button label + action
+      document.getElementById('tplName').textContent = `— ${tpl.name || ''}`;
+      document.getElementById('openBtn').onclick = () => {
+        try { sessionStorage.setItem('skipRouterOnce','1'); } catch {}
+        const p = new URLSearchParams();
+        p.set('template_id', template_id || tpl.template_id);
+        if (orderId) p.set('orderId', orderId);
+        if (name) p.set('name', name);
+        if (photo) p.set('photo', photo);
+        p.set('noroute','1');
+        location.href = `../index.html?${p.toString()}`;
+      };
+    } catch(err){
+      document.getElementById('pageTitle').textContent = 'Load error';
+      const el = document.getElementById('err');
+      el.classList.remove('hidden');
+      el.textContent = (err && err.message) || String(err);
+    }
+  })();
   </script>
 </body>
 </html>
